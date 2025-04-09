@@ -76,10 +76,13 @@ jobs:
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
+          # Use a specific version of GoReleaser instead of "latest" for better reliability
+          version: v1.18.2  # This is a known stable version
           distribution: goreleaser
-          version: latest
-          args: release --clean --debug
+          # Only use the clean flag, which is supported in all versions
+          args: release --clean
         env:
+          # Ensure all environment variables are properly set
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           GORELEASER_CURRENT_TAG: v${{ steps.calculate_version.outputs.version }}
