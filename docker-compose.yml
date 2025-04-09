@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  trino:
+    image: 'trinodb/trino:424'
+    container_name: trino
+    ports:
+      - '8080:8080'
+    volumes:
+      - ./trino-conf:/etc/trino
+    networks:
+      - trino-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/v1/info"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  trino-mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: trino-mcp
+    ports:
+      - '9097:9097'
+    environment:
+      - TRINO_HOST=trino
+      - TRINO_PORT=8080
+      - TRINO_USER=trino
+      - TRINO_CATALOG=memory
+      - TRINO_SCHEMA=default
+      - MCP_TRANSPORT=http
+      - MCP_PORT=9097
+    depends_on:
+      trino:
+        condition: service_healthy
+    networks:
+      - trino-net
+
+networks:
+  trino-net:
+    driver: bridge 
