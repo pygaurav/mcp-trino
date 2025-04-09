@@ -62,12 +62,59 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Debug step - show GoReleaser version and config
+      - name: Debug GoReleaser Config
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository Owner: ${{ github.repository_owner }}"
+          echo "GitHub Actor: ${{ github.actor }}"
+          cat .goreleaser.yml
+          echo "---"
+          echo "Building release for version v${{ steps.calculate_version.outputs.version }}"
+          echo "GITHUB_TOKEN permissions: ${{ toJson(github.token_permissions) }}"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v4
         with:
           distribution: goreleaser
           version: latest
-          args: release --clean
+          args: release --clean --debug
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          GORELEASER_CURRENT_TAG: v${{ steps.calculate_version.outputs.version }}
+          
+      # Fallback manual release in case GoReleaser fails to upload assets
+      - name: Build Binaries Manually (Fallback)
+        id: manual_build
+        if: failure()
+        run: |
+          echo "GoReleaser may have failed, building binaries manually as fallback"
+          # Create a directory for the binaries
+          mkdir -p dist/binaries
+          # Build for different platforms
+          GOOS=linux GOARCH=amd64 go build -o dist/binaries/mcp-trino-linux-amd64 ./cmd/server
+          GOOS=darwin GOARCH=amd64 go build -o dist/binaries/mcp-trino-darwin-amd64 ./cmd/server
+          GOOS=windows GOARCH=amd64 go build -o dist/binaries/mcp-trino-windows-amd64.exe ./cmd/server
+          # Create archives
+          cd dist/binaries
+          tar -czf mcp-trino-linux-amd64.tar.gz mcp-trino-linux-amd64
+          tar -czf mcp-trino-darwin-amd64.tar.gz mcp-trino-darwin-amd64
+          zip mcp-trino-windows-amd64.zip mcp-trino-windows-amd64.exe
+          cd ../..
+          ls -la dist/binaries
+          echo "manual_build=true" >> $GITHUB_OUTPUT
+
+      - name: Create Manual GitHub Release (Fallback)
+        if: steps.manual_build.outputs.manual_build == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: v${{ steps.calculate_version.outputs.version }}
+          name: Release v${{ steps.calculate_version.outputs.version }}
+          draft: false
+          prerelease: false
+          files: |
+            dist/binaries/mcp-trino-linux-amd64.tar.gz
+            dist/binaries/mcp-trino-darwin-amd64.tar.gz
+            dist/binaries/mcp-trino-windows-amd64.zip
