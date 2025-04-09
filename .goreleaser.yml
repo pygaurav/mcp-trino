@@ -29,8 +29,9 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+# Use simpler snapshot naming to ensure compatibility
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  name_template: "next"
 
 changelog:
   sort: asc
@@ -52,6 +53,7 @@ release:
   prerelease: auto
   name_template: "{{.ProjectName}} v{{.Version}}"
 
+# Update Docker configuration to be compatible with most GoReleaser versions
 dockers:
   - image_templates:
       - "ghcr.io/{{.Env.GITHUB_REPOSITORY_OWNER}}/mcp-trino:{{ .Version }}"
@@ -63,7 +65,5 @@ dockers:
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
-    # Add GitHub Container Registry push configuration
-    use: docker
-    push_flags:
-      - "--tls-verify=false"
+    # Simplified Docker configuration
+    skip_push: false
