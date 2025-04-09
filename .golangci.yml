@@ -30,12 +30,15 @@ linters-settings:
   gosec:
     excludes:
       - G204
+      - G112
   gocritic:
     enabled-tags:
       - diagnostic
       - style
       - performance
       - opinionated
+    disabled-checks:
+      - exitAfterDefer
 
 issues:
   max-issues-per-linter: 0

@@ -24,9 +24,10 @@ jobs:
         uses: golangci/golangci-lint-action@v3
         with:
           version: latest
+          args: --timeout=5m
 
       - name: Run golangci-lint
-        run: golangci-lint run --timeout=5m --out-format=colored-line-number
+        run: golangci-lint run --out-format=colored-line-number
 
       - name: Check Go mod tidy
         run: |
