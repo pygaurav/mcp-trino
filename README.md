@@ -127,18 +127,22 @@ The CI pipeline runs automatically on pushes and pull requests to the main branc
 
 ### Release Process
 
-To create a new release:
+The project uses an automated release process:
 
-1. Tag the commit with a semantic version:
-   ```bash
-   git tag -a v1.0.0 -m "Release v1.0.0"
-   git push origin v1.0.0
-   ```
+1. When changes are merged to the `main` branch, a GitHub Actions workflow is triggered.
 
-2. The release workflow will automatically:
-   - Build binaries for multiple platforms (named "mcp-trino")
-   - Create Docker images
-   - Publish the release assets on GitHub
+2. The workflow automatically:
+   - Calculates the next version (starting from 1.0.0 and incrementing)
+   - Creates and pushes a new version tag
+   - Builds binaries for multiple platforms (named "mcp-trino")
+   - Creates and pushes Docker images to GitHub Container Registry (ghcr.io)
+   - Publishes all binaries and assets to GitHub Releases
+
+You can find:
+- Released binaries at: `https://github.com/tuannvm/mcp-trino/releases`
+- Docker images at: `ghcr.io/tuannvm/mcp-trino:latest` or `ghcr.io/tuannvm/mcp-trino:v1.0.0`
+
+No manual version tagging is required - just merge your changes to `main` and the release will be created automatically.
 
 ### Makefile
 

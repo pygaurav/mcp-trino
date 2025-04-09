@@ -2,27 +2,54 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 permissions:
-  contents: write
-  packages: write
+  contents: write # Required for creating GitHub releases
+  packages: write # Required for pushing to GitHub Container Registry
 
 jobs:
-  goreleaser:
+  release:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # Required for version calculation
 
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.21"
+          go-version: ">=1.19"
           cache: true
+
+      - name: Calculate Version
+        id: calculate_version
+        run: |
+          # Start at 1.0.0 if no tags exist
+          LATEST_TAG=$(git tag -l 'v*' | sort -V | tail -n 1)
+          if [ -z "$LATEST_TAG" ]; then
+            NEW_VERSION="1.0.0"
+          else
+            # Strip the 'v' prefix
+            CURRENT_VERSION=${LATEST_TAG#v}
+            # Split into major, minor, patch
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+            # Increment patch version
+            PATCH=$((PATCH + 1))
+            NEW_VERSION="$MAJOR.$MINOR.$PATCH"
+          fi
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Calculated new version: v$NEW_VERSION"
+
+      - name: Create Tag
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git tag -a v${{ steps.calculate_version.outputs.version }} -m "Release v${{ steps.calculate_version.outputs.version }}"
+          git push origin v${{ steps.calculate_version.outputs.version }}
 
       - name: Login to GitHub Container Registry
         uses: docker/login-action@v2

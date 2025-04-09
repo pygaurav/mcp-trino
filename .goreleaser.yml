@@ -41,6 +41,15 @@ changelog:
       - Merge pull request
       - Merge branch
 
+# Explicitly configure GitHub Releases
+release:
+  github:
+    owner: "{{.Env.GITHUB_REPOSITORY_OWNER}}"
+    name: "{{.ProjectName}}"
+  draft: false
+  prerelease: auto
+  name_template: "{{.ProjectName}} v{{.Version}}"
+
 dockers:
   - image_templates:
       - "ghcr.io/{{.Env.GITHUB_REPOSITORY_OWNER}}/mcp-trino:{{ .Version }}"
@@ -52,3 +61,7 @@ dockers:
       - "--label=org.opencontainers.image.title={{.ProjectName}}"
       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
       - "--label=org.opencontainers.image.version={{.Version}}"
+    # Add GitHub Container Registry push configuration
+    use: docker
+    push_flags:
+      - "--tls-verify=false"
