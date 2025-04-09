@@ -113,3 +113,68 @@ go test ./...
 ## License
 
 MIT
+
+## CI/CD and Releases
+
+This project uses GitHub Actions for continuous integration and GoReleaser for automated releases.
+
+### Continuous Integration
+
+The CI pipeline runs automatically on pushes and pull requests to the main branch, performing:
+- Static code analysis with golangci-lint
+- Go dependency verification 
+- Build validation
+- Test execution with code coverage reporting
+
+All CI checks must pass before a PR can be merged to the main branch. The repository is configured with branch protection rules to enforce this requirement.
+
+### Release Process
+
+The project uses an automated release process with a sequential workflow:
+
+1. When changes are merged to the `main` branch, the CI workflow runs first to validate the code.
+
+2. After the CI workflow completes successfully, the release workflow automatically:
+   - Calculates the next version (starting from 1.0.0 and incrementing)
+   - Creates and pushes a new version tag
+   - Builds binaries for multiple platforms (named "mcp-trino")
+   - Creates and pushes Docker images to GitHub Container Registry (ghcr.io)
+   - Publishes all binaries and assets to GitHub Releases
+
+You can find:
+- Released binaries at: `https://github.com/tuannvm/mcp-trino/releases`
+- Docker images at: `ghcr.io/tuannvm/mcp-trino:latest` or `ghcr.io/tuannvm/mcp-trino:v1.0.0`
+
+No manual version tagging is required - just merge your changes to `main` and the release will be created automatically.
+
+### Makefile
+
+For convenience, a Makefile is provided with common development commands:
+
+```bash
+# Build the application
+make build
+
+# Run tests
+make test
+
+# Run linters (same as CI)
+make lint
+
+# Clean build artifacts
+make clean
+
+# Run in development mode
+make run-dev
+
+# Test GoReleaser locally (creates snapshot)
+make release-snapshot
+
+# Run the application
+make run
+
+# Docker operations
+make run-docker          # Build and run in Docker
+make docker-compose-up   # Start with Docker Compose
+make docker-compose-down # Stop Docker Compose services
+```
