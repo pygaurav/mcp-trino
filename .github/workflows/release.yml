@@ -1,9 +1,11 @@
 name: Release
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["CI"]
+    branches: [main]
+    types:
+      - completed
 
 permissions:
   contents: write # Required for creating GitHub releases
@@ -11,6 +13,8 @@ permissions:
 
 jobs:
   release:
+    # Only run if the CI workflow was successful
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

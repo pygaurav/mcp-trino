@@ -1,4 +1,4 @@
-.PHONY: build test clean run-dev release-snapshot run-docker run docker-compose-up docker-compose-down
+.PHONY: build test clean run-dev release-snapshot run-docker run docker-compose-up docker-compose-down lint
 
 # Variables
 BINARY_NAME=mcp-trino
@@ -42,6 +42,14 @@ docker-compose-up:
 # Stop Docker Compose services
 docker-compose-down:
 	docker-compose down
+
+# Run linting checks (same as CI)
+lint:
+	@echo "Running linters..."
+	@go mod tidy
+	@if ! git diff --quiet go.mod go.sum; then echo "go.mod or go.sum is not tidy, run 'go mod tidy'"; git diff go.mod go.sum; exit 1; fi
+	@if ! command -v golangci-lint &> /dev/null; then echo "Installing golangci-lint..." && go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; fi
+	@golangci-lint run --timeout=5m
 
 # Default target
 all: clean build 

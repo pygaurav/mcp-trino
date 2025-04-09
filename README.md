@@ -121,17 +121,20 @@ This project uses GitHub Actions for continuous integration and GoReleaser for a
 ### Continuous Integration
 
 The CI pipeline runs automatically on pushes and pull requests to the main branch, performing:
+- Static code analysis with golangci-lint
 - Go dependency verification 
 - Build validation
-- Test execution
+- Test execution with code coverage reporting
+
+All CI checks must pass before a PR can be merged to the main branch. The repository is configured with branch protection rules to enforce this requirement.
 
 ### Release Process
 
-The project uses an automated release process:
+The project uses an automated release process with a sequential workflow:
 
-1. When changes are merged to the `main` branch, a GitHub Actions workflow is triggered.
+1. When changes are merged to the `main` branch, the CI workflow runs first to validate the code.
 
-2. The workflow automatically:
+2. After the CI workflow completes successfully, the release workflow automatically:
    - Calculates the next version (starting from 1.0.0 and incrementing)
    - Creates and pushes a new version tag
    - Builds binaries for multiple platforms (named "mcp-trino")
@@ -154,6 +157,9 @@ make build
 
 # Run tests
 make test
+
+# Run linters (same as CI)
+make lint
 
 # Clean build artifacts
 make clean
