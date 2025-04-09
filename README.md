@@ -113,3 +113,58 @@ go test ./...
 ## License
 
 MIT
+
+## CI/CD and Releases
+
+This project uses GitHub Actions for continuous integration and GoReleaser for automated releases.
+
+### Continuous Integration
+
+The CI pipeline runs automatically on pushes and pull requests to the main branch, performing:
+- Go dependency verification 
+- Build validation
+- Test execution
+
+### Release Process
+
+To create a new release:
+
+1. Tag the commit with a semantic version:
+   ```bash
+   git tag -a v1.0.0 -m "Release v1.0.0"
+   git push origin v1.0.0
+   ```
+
+2. The release workflow will automatically:
+   - Build binaries for multiple platforms
+   - Create Docker images
+   - Publish the release assets on GitHub
+
+### Makefile
+
+For convenience, a Makefile is provided with common development commands:
+
+```bash
+# Build the application
+make build
+
+# Run tests
+make test
+
+# Clean build artifacts
+make clean
+
+# Run in development mode
+make run-dev
+
+# Test GoReleaser locally (creates snapshot)
+make release-snapshot
+
+# Run the application
+make run
+
+# Docker operations
+make run-docker          # Build and run in Docker
+make docker-compose-up   # Start with Docker Compose
+make docker-compose-down # Stop Docker Compose services
+```
