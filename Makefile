@@ -1,7 +1,7 @@
 .PHONY: build test clean run-dev release-snapshot run-docker run docker-compose-up docker-compose-down
 
 # Variables
-BINARY_NAME=trino-mcp
+BINARY_NAME=mcp-trino
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_DIR=bin
 

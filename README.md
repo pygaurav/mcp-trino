@@ -136,7 +136,7 @@ To create a new release:
    ```
 
 2. The release workflow will automatically:
-   - Build binaries for multiple platforms
+   - Build binaries for multiple platforms (named "mcp-trino")
    - Create Docker images
    - Publish the release assets on GitHub
 
