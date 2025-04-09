@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -33,7 +34,8 @@ func main() {
 	log.Println("Connecting to Trino server...")
 	trinoClient, err := trino.NewClient(trinoConfig)
 	if err != nil {
-		log.Fatalf("Failed to initialize Trino client: %v", err)
+		log.Printf("Failed to initialize Trino client: %v", err)
+		os.Exit(1)
 	}
 	defer trinoClient.Close()
 
@@ -41,7 +43,8 @@ func main() {
 	log.Println("Testing Trino connection...")
 	catalogs, err := trinoClient.ListCatalogs()
 	if err != nil {
-		log.Fatalf("Failed to connect to Trino: %v", err)
+		log.Printf("Failed to connect to Trino: %v", err)
+		os.Exit(1)
 	}
 	log.Printf("Connected to Trino server. Available catalogs: %s", strings.Join(catalogs, ", "))
 
@@ -67,7 +70,8 @@ func main() {
 	switch transport {
 	case "stdio":
 		if err := server.ServeStdio(mcpServer); err != nil {
-			log.Fatalf("STDIO server error: %v", err)
+			log.Printf("STDIO server error: %v", err)
+			os.Exit(1)
 		}
 	case "http":
 		// HTTP server implementation
@@ -86,12 +90,13 @@ func main() {
 
 				http.Error(w, "Not found", http.StatusNotFound)
 			}),
+			ReadHeaderTimeout: 10 * time.Second,
 		}
 
 		// Start HTTP server in goroutine
 		go func() {
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("HTTP server error: %v", err)
+				log.Printf("HTTP server error: %v", err)
 			}
 		}()
 
@@ -102,7 +107,8 @@ func main() {
 			log.Printf("Error closing HTTP server: %v", err)
 		}
 	default:
-		log.Fatalf("Unsupported transport: %s", transport)
+		log.Printf("Unsupported transport: %s", transport)
+		os.Exit(1)
 	}
 
 	log.Println("Server shutdown complete")

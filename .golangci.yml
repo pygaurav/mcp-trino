@@ -27,7 +27,6 @@ linters-settings:
   revive:
     rules:
       - name: exported
-        arguments: ["enable-stub"]
   gosec:
     excludes:
       - G204
