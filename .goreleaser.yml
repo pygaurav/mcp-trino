@@ -1,6 +1,4 @@
-# Add version specification at the top
-version: 2
-
+# Configuration version removed to avoid parsing issues with v1.18.2
 before:
   hooks:
     - go mod tidy
