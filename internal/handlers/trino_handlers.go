@@ -1,3 +1,6 @@
+// Package handlers provides MCP tool handlers for interacting with Trino.
+// It defines methods for executing queries, listing catalogs, schemas, tables,
+// and retrieving table schemas.
 package handlers
 
 import (
@@ -23,7 +26,7 @@ func NewTrinoHandlers(client *trino.Client) *TrinoHandlers {
 }
 
 // ExecuteQuery handles query execution
-func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *TrinoHandlers) ExecuteQuery(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract the query parameter
 	query, ok := request.Params.Arguments["query"].(string)
 	if !ok {
@@ -51,7 +54,7 @@ func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRe
 }
 
 // ListCatalogs handles catalog listing
-func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *TrinoHandlers) ListCatalogs(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	catalogs, err := h.TrinoClient.ListCatalogs()
 	if err != nil {
 		log.Printf("Error listing catalogs: %v", err)
@@ -70,7 +73,7 @@ func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRe
 }
 
 // ListSchemas handles schema listing
-func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *TrinoHandlers) ListSchemas(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract catalog parameter (optional)
 	var catalog string
 	if catalogParam, ok := request.Params.Arguments["catalog"].(string); ok {
@@ -95,7 +98,7 @@ func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolReq
 }
 
 // ListTables handles table listing
-func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *TrinoHandlers) ListTables(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract catalog and schema parameters (optional)
 	var catalog, schema string
 	if catalogParam, ok := request.Params.Arguments["catalog"].(string); ok {
@@ -123,7 +126,7 @@ func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequ
 }
 
 // GetTableSchema handles table schema retrieval
-func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (h *TrinoHandlers) GetTableSchema(_ context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	// Extract parameters
 	var catalog, schema string
 	var table string

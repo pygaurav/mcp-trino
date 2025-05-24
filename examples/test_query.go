@@ -1,3 +1,5 @@
+// Package main executes test queries against the Trino server
+// and demonstrates basic client functionality.
 package main
 
 import (

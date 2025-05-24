@@ -1,3 +1,5 @@
+// Package trino provides a client for interacting with a Trino server,
+// including query execution and metadata retrieval.
 package trino
 
 import (
@@ -9,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/trinodb/trino-go-client/trino"
+	_ "github.com/trinodb/trino-go-client/trino" // Register Trino database driver
 	"github.com/tuannvm/mcp-trino/internal/config"
 )
 

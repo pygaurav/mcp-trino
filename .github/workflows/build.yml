@@ -60,14 +60,14 @@ jobs:
       - name: Install golangci-lint
         uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.1.6 # Pinned to the version used in setup and testing
           args: --timeout=5m
           install-mode: binary
           skip-pkg-cache: true
           skip-build-cache: true
 
       - name: Run linters
-        run: golangci-lint run
+        run: golangci-lint run ./... # Explicitly run on all packages
 
   # Security vulnerability scanning and SBOM generation
   security:

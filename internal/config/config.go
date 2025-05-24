@@ -1,3 +1,5 @@
+// Package config provides configuration handling for the Trino connector,
+// including Trino server connection parameters and query execution settings.
 package config
 
 import (

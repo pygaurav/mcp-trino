@@ -1,3 +1,5 @@
+// Package main implements the Trino MCP server and provides
+// HTTP and STDIO interfaces for interacting with Trino via MCP.
 package main
 
 import (
@@ -177,7 +179,7 @@ func handleSignals(done chan<- bool) {
 	done <- true
 }
 
-func handleStatus(w http.ResponseWriter, r *http.Request) {
+func handleStatus(w http.ResponseWriter, _ *http.Request) {
 	status := map[string]string{"status": "ok", "version": Version}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(status)
