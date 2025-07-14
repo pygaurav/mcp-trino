@@ -10,8 +10,10 @@ Before implementing OAuth in the MCP server, you must have a Trino cluster that 
 
 1. **Trino Server OAuth Setup**: Trino coordinator must be configured with OAuth authentication
 2. **OAuth Provider**: A configured OAuth provider (Google, Azure AD, Okta, etc.)
-3. **Well-Known Endpoint**: Trino must expose OAuth metadata at `/.well-known/oauth-authorization-server`
-4. **JWT Support**: Trino must be configured to accept JWT tokens for authentication
+3. **HTTPS Required**: Trino must be configured with HTTPS (required for OAuth 2.0)
+4. **OpenID Connect Discovery**: Trino uses OpenID Connect Discovery by default for OAuth metadata
+5. **JWT Support**: Trino must be configured to accept JWT tokens for authentication
+6. **Callback URL**: OAuth provider must be configured with Trino's callback URL: `https://<trino-coordinator>/oauth2/callback`
 
 ### Trino OAuth Configuration Example
 ```properties
@@ -20,6 +22,16 @@ http-server.authentication.type=oauth2
 http-server.authentication.oauth2.issuer=https://your-oauth-provider.com
 http-server.authentication.oauth2.client-id=your-client-id
 http-server.authentication.oauth2.client-secret=your-client-secret
+
+# Required for OAuth 2.0
+http-server.https.enabled=true
+http-server.https.port=443
+node.internal-address-source=FQDN
+
+# Optional OAuth 2.0 settings
+http-server.authentication.oauth2.scopes=openid,profile,email
+http-server.authentication.oauth2.refresh-tokens=true
+http-server.authentication.oauth2.user-mapping.pattern=(.*)
 ```
 
 ## Authentication Flow Options
@@ -84,12 +96,13 @@ type TrinoConfig struct {
 ```
 
 ### 2. MCP-Compliant OAuth Discovery (`internal/oauth/discovery.go`)
-- Fetch OAuth configuration from `{scheme}://{host}:{port}/.well-known/oauth-authorization-server`
+- Fetch OAuth configuration using OpenID Connect Discovery from `{scheme}://{host}:{port}/.well-known/openid-configuration`
 - Parse authorization server metadata (RFC 8414)
 - Validate HTTPS endpoints (MCP requirement)
 - Configure OAuth client automatically
 - Generate Resource Indicator URI from existing Host/Port/Scheme
 - Handle discovery errors gracefully
+- Support Trino's OpenID Connect Discovery by default
 
 ### 3. MCP-Compliant Browser Authentication (`internal/oauth/browser.go`)
 - Start local HTTPS server for OAuth callback (MCP requirement)
@@ -171,7 +184,7 @@ type TrinoConfig struct {
 
 ### OAuth 2.1 Authentication Flow
 1. **First Run**: MCP server detects no stored tokens
-2. **Auto-Discovery**: Fetches OAuth config from `{scheme}://{host}:{port}/.well-known/oauth-authorization-server`
+2. **Auto-Discovery**: Fetches OAuth config from `{scheme}://{host}:{port}/.well-known/openid-configuration`
 3. **Resource Indicator**: Generates canonical URI for MCP server (e.g., `https://trino.example.com:443/mcp`)
 4. **Browser Launch**: Opens browser to OAuth authorization URL with PKCE + Resource Indicator
 5. **User Login**: User authenticates with their OAuth provider (Google, Azure AD, etc.)
@@ -179,6 +192,8 @@ type TrinoConfig struct {
 7. **Token Validation**: Validates token audience matches Resource Indicator
 8. **Token Storage**: Securely stores access/refresh tokens locally
 9. **Subsequent Runs**: Uses stored tokens, refreshes automatically with Resource Indicator
+
+**Note**: This flow creates a separate OAuth client for the MCP server, distinct from Trino's own OAuth configuration.
 
 ## Key Implementation Details
 
@@ -221,8 +236,16 @@ type TrinoConfig struct {
 **Prerequisites:**
 - Trino cluster must already be configured with OAuth authentication
 - OAuth provider (Google, Azure AD, etc.) must be set up and configured in Trino
-- Trino must expose OAuth metadata via well-known endpoint
+- Trino must be configured with HTTPS (required for OAuth 2.0)
+- Trino must expose OAuth metadata via OpenID Connect Discovery
 - Network connectivity to OAuth provider required during authentication
+- Browser access required for initial authentication
+
+**Important Notes:**
+- Trino uses Authorization Code flow (not Client Credentials)
+- Trino callback URL: `https://<trino-coordinator>/oauth2/callback`
+- MCP server will create its own OAuth client registration
+- Refresh tokens are supported for longer sessions
 
 **Not Suitable For:**
 - Trino clusters without OAuth support
