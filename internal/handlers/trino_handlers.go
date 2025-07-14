@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/tuannvm/mcp-trino/internal/middleware"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -24,8 +25,18 @@ func NewTrinoHandlers(client *trino.Client) *TrinoHandlers {
 
 // ExecuteQuery handles query execution
 func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log authentication info
+	middleware.LogAuthenticationInfo(ctx, "execute_query")
+	
+	// Type assert Arguments to map[string]interface{}
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		mcpErr := fmt.Errorf("invalid arguments format")
+		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
+	}
+	
 	// Extract the query parameter
-	query, ok := request.Params.Arguments["query"].(string)
+	query, ok := args["query"].(string)
 	if !ok {
 		mcpErr := fmt.Errorf("query parameter must be a string")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
@@ -52,6 +63,9 @@ func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRe
 
 // ListCatalogs handles catalog listing
 func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log authentication info
+	middleware.LogAuthenticationInfo(ctx, "list_catalogs")
+	
 	catalogs, err := h.TrinoClient.ListCatalogs()
 	if err != nil {
 		log.Printf("Error listing catalogs: %v", err)
@@ -71,9 +85,19 @@ func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRe
 
 // ListSchemas handles schema listing
 func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log authentication info
+	middleware.LogAuthenticationInfo(ctx, "list_schemas")
+	
+	// Type assert Arguments to map[string]interface{}
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		mcpErr := fmt.Errorf("invalid arguments format")
+		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
+	}
+	
 	// Extract catalog parameter (optional)
 	var catalog string
-	if catalogParam, ok := request.Params.Arguments["catalog"].(string); ok {
+	if catalogParam, ok := args["catalog"].(string); ok {
 		catalog = catalogParam
 	}
 
@@ -96,12 +120,22 @@ func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolReq
 
 // ListTables handles table listing
 func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log authentication info
+	middleware.LogAuthenticationInfo(ctx, "list_tables")
+	
+	// Type assert Arguments to map[string]interface{}
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		mcpErr := fmt.Errorf("invalid arguments format")
+		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
+	}
+	
 	// Extract catalog and schema parameters (optional)
 	var catalog, schema string
-	if catalogParam, ok := request.Params.Arguments["catalog"].(string); ok {
+	if catalogParam, ok := args["catalog"].(string); ok {
 		catalog = catalogParam
 	}
-	if schemaParam, ok := request.Params.Arguments["schema"].(string); ok {
+	if schemaParam, ok := args["schema"].(string); ok {
 		schema = schemaParam
 	}
 
@@ -124,19 +158,29 @@ func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequ
 
 // GetTableSchema handles table schema retrieval
 func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	// Log authentication info
+	middleware.LogAuthenticationInfo(ctx, "get_table_schema")
+	
+	// Type assert Arguments to map[string]interface{}
+	args, ok := request.Params.Arguments.(map[string]interface{})
+	if !ok {
+		mcpErr := fmt.Errorf("invalid arguments format")
+		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
+	}
+	
 	// Extract parameters
 	var catalog, schema string
 	var table string
 
-	if catalogParam, ok := request.Params.Arguments["catalog"].(string); ok {
+	if catalogParam, ok := args["catalog"].(string); ok {
 		catalog = catalogParam
 	}
-	if schemaParam, ok := request.Params.Arguments["schema"].(string); ok {
+	if schemaParam, ok := args["schema"].(string); ok {
 		schema = schemaParam
 	}
 
 	// Table parameter is required
-	tableParam, ok := request.Params.Arguments["table"].(string)
+	tableParam, ok := args["table"].(string)
 	if !ok {
 		mcpErr := fmt.Errorf("table parameter is required")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil

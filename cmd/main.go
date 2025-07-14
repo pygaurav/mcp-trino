@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -12,8 +13,11 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/tuannvm/mcp-trino/internal/auth"
 	"github.com/tuannvm/mcp-trino/internal/config"
 	"github.com/tuannvm/mcp-trino/internal/handlers"
+	"github.com/tuannvm/mcp-trino/internal/middleware"
+	"github.com/tuannvm/mcp-trino/internal/oauth"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -29,6 +33,51 @@ func main() {
 	// Initialize Trino configuration
 	log.Println("Loading Trino configuration...")
 	trinoConfig := config.NewTrinoConfig()
+
+	// Initialize OAuth configuration if enabled
+	var bearerValidator *auth.BearerTokenValidator
+	var authMiddleware *middleware.AuthMiddleware
+	
+	if trinoConfig.OAuthEnabled {
+		log.Println("Setting up OAuth authentication...")
+		
+		// Setup OAuth configuration
+		providerURL := getEnv("OAUTH_PROVIDER_URL", "")
+		if providerURL == "" {
+			log.Fatal("OAUTH_PROVIDER_URL is required when OAuth is enabled")
+		}
+		
+		ctx := context.Background()
+		oauthConfig, err := oauth.SetupOAuthConfiguration(ctx, providerURL)
+		if err != nil {
+			log.Fatalf("Failed to setup OAuth configuration: %v", err)
+		}
+		
+		// Fetch JWKS for token validation
+		client := oauth.NewOAuthDiscoveryClient()
+		jwks, err := client.FetchJWKS(ctx, oauthConfig.JWKSURL)
+		if err != nil {
+			log.Fatalf("Failed to fetch JWKS: %v", err)
+		}
+		
+		// Get the first RSA key (simplified)
+		if len(jwks.Keys) == 0 {
+			log.Fatal("No keys found in JWKS")
+		}
+		
+		publicKey, err := jwks.Keys[0].GetPublicKey()
+		if err != nil {
+			log.Fatalf("Failed to parse public key: %v", err)
+		}
+		
+		// Create Bearer token validator
+		bearerValidator = auth.NewBearerTokenValidator(publicKey, oauthConfig.Issuer, oauthConfig.ClientID)
+		
+		// Create authentication middleware
+		authMiddleware = middleware.NewAuthMiddleware(trinoConfig, bearerValidator)
+		
+		log.Println("OAuth authentication setup complete")
+	}
 
 	// Initialize Trino client
 	log.Println("Connecting to Trino server...")
@@ -90,31 +139,36 @@ func main() {
 		log.Printf("SSE path: %s", sseServer.CompleteSsePath())
 		log.Printf("Message path: %s", sseServer.CompleteMessagePath())
 
-		httpServer := &http.Server{
-			Addr: addr,
-			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				log.Printf("HTTP %s %s", r.Method, r.URL.Path)
-				// CORS
-				w.Header().Set("Access-Control-Allow-Origin", "*")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept")
+		// Create HTTP handler with authentication
+		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
+			
+			switch {
+			case r.URL.Path == "/sse":
+				w.Header().Set("Content-Type", "text/event-stream")
+				sseServer.ServeHTTP(w, r)
+			case r.Method == http.MethodPost && r.URL.Path == "/api/query":
+				handleTrinoQuery(w, r, trinoClient)
+			case r.Method == http.MethodGet && r.URL.Path == "/":
+				handleStatus(w, r)
+			default:
+				sseServer.ServeHTTP(w, r)
+			}
+		})
 
-				if r.Method == http.MethodOptions {
-					w.WriteHeader(http.StatusOK)
-					return
-				}
-				switch {
-				case r.URL.Path == "/sse":
-					w.Header().Set("Content-Type", "text/event-stream")
-					sseServer.ServeHTTP(w, r)
-				case r.Method == http.MethodPost && r.URL.Path == "/api/query":
-					handleTrinoQuery(w, r, trinoClient)
-				case r.Method == http.MethodGet && r.URL.Path == "/":
-					handleStatus(w, r)
-				default:
-					sseServer.ServeHTTP(w, r)
-				}
-			}),
+		// Apply middleware stack
+		handler = middleware.LoggingMiddleware(handler)
+		handler = middleware.SecurityHeadersMiddleware(handler)
+		handler = middleware.CORSMiddleware(handler)
+		
+		// Apply authentication middleware if OAuth is enabled
+		if trinoConfig.OAuthEnabled && authMiddleware != nil {
+			handler = authMiddleware.AuthenticateRequest(handler)
+		}
+
+		httpServer := &http.Server{
+			Addr:    addr,
+			Handler: handler,
 		}
 
 		go func() {
@@ -138,6 +192,10 @@ func handleTrinoQuery(w http.ResponseWriter, r *http.Request, client *trino.Clie
 		http.Error(w, "Trino client not available", http.StatusServiceUnavailable)
 		return
 	}
+
+	// Log authentication info
+	middleware.LogAuthenticationInfo(r.Context(), "direct query execution")
+	
 	var req struct {
 		Query string `json:"query"`
 	}
