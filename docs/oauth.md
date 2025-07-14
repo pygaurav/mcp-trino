@@ -1,6 +1,6 @@
-# OAuth Implementation Plan for Trino MCP Server with mcp-go v0.33.0
+# OAuth Implementation Plan for Trino MCP Server
 
-Based on the mcp-go v0.33.0 OAuth 2.1 capabilities and Claude Code native OAuth support, here's a simplified plan for implementing OAuth support leveraging the built-in MCP Authorization specification:
+Based on Claude Code native OAuth support and custom server-side OAuth implementation, here's a plan for adding OAuth 2.1 authentication to the Trino MCP server:
 
 ## Prerequisites
 
@@ -69,31 +69,25 @@ export MCP_HTTPS=true
 - Automatic token refresh and storage
 - **Requires**: OAuth provider configured for MCP server authentication
 
-## MCP June 2025 Specification Compliance with mcp-go v0.33.0
+## MCP June 2025 Specification Compliance
 
-### Key Requirements from MCP Specification (Built into mcp-go v0.33.0):
-1. **OAuth 2.1 Compliance**: Full OAuth 2.1 support with appropriate security measures
-2. **Resource Indicators (RFC 8707)**: Built-in implementation to prevent token misuse
-3. **PKCE**: Integrated PKCE support for public clients (browser-based auth)
+### Key Requirements from MCP Specification:
+1. **OAuth 2.1 Compliance**: OAuth 2.1 support with appropriate security measures
+2. **Resource Indicators (RFC 8707)**: Implemented to prevent token misuse
+3. **PKCE**: PKCE support for public clients (browser-based auth)
 4. **Dynamic Client Registration**: OAuth 2.0 Dynamic Client Registration Protocol support
 5. **Authorization Server Metadata**: OAuth 2.0 Authorization Server Metadata (RFC 8414) support
-6. **Bearer Token Authentication**: Native `Authorization: Bearer <token>` header processing
-7. **HTTPS Enforcement**: Automatic HTTPS enforcement for all authorization endpoints
+6. **Bearer Token Authentication**: `Authorization: Bearer <token>` header processing
+7. **HTTPS Enforcement**: HTTPS enforcement for all authorization endpoints
 
-### mcp-go v0.33.0 OAuth 2.1 Features:
-- **Native OAuth Server**: Built-in OAuth 2.1 authorization server capabilities
-- **Token Validation**: Comprehensive JWT token validation and processing
-- **Client Management**: Dynamic and static OAuth client registration
-- **Security Headers**: Automatic security header management
-- **Session Management**: Built-in session and token lifecycle management
+### Implementation Architecture:
+- **Client-Side OAuth**: Claude Code/mcp-remote handles OAuth flows, PKCE, token management
+- **Server-Side OAuth**: Custom implementation for JWT validation and resource server functionality
+- **mcp-go Role**: Provides MCP protocol support and client-side OAuth capabilities (not server-side)
+- **Custom Authentication**: Bearer token validation, middleware, and user context handling
 
-### 1. Simplified TrinoConfig with mcp-go v0.33.0 OAuth Support (`internal/config/config.go`)
+### 1. TrinoConfig with OAuth Support (`internal/config/config.go`)
 ```go
-import (
-    "github.com/mark3labs/mcp-go/pkg/auth"
-    "github.com/mark3labs/mcp-go/pkg/oauth"
-)
-
 // TrinoConfig holds Trino connection parameters
 type TrinoConfig struct {
     // Basic connection parameters
@@ -109,35 +103,32 @@ type TrinoConfig struct {
     AllowWriteQueries bool          // Controls whether non-read-only SQL queries are allowed
     QueryTimeout      time.Duration // Query execution timeout
     
-    // OAuth mode configuration (using mcp-go v0.33.0)
-    OAuthEnabled      bool                 `env:"TRINO_OAUTH_ENABLED" default:"false"`
-    OAuthConfig       *oauth.ServerConfig  // mcp-go OAuth server configuration
-    
-    // Runtime fields (populated by mcp-go authentication middleware)
-    AuthContext       *auth.Context // mcp-go authentication context
+    // OAuth mode configuration
+    OAuthEnabled      bool   // Enable OAuth 2.1 authentication
 }
 ```
 
 ### 2. Bearer Token Validation (`internal/auth/bearer.go`)
-- **Leverage mcp-go v0.33.0**: Use built-in Bearer token extraction and validation
-- **JWT Processing**: Utilize mcp-go's comprehensive JWT token validation
-- **User Context**: Extract user information using mcp-go's token parsing
-- **Error Handling**: Leverage mcp-go's standardized error responses
+- **Custom JWT Processing**: Comprehensive JWT token validation using golang-jwt/jwt
+- **RSA Signature Verification**: Validate tokens using OAuth provider's public keys
+- **User Context Extraction**: Extract user information from JWT claims
+- **Error Handling**: Standardized error responses for authentication failures
+- **Token Lifecycle**: Handle token expiration, validation, and user context creation
 - **Note**: Token acquisition and refresh handled by Claude Code/mcp-remote
 
 ### 3. OAuth Discovery for MCP Server Configuration (`internal/oauth/discovery.go`)
-- **mcp-go v0.33.0 Integration**: Use built-in OpenID Connect Discovery client
-- **Automatic Configuration**: Leverage mcp-go's OAuth provider metadata fetching
-- **Client Registration**: Use mcp-go's dynamic client registration capabilities
-- **Configuration Helper**: Provide setup assistance using mcp-go's configuration tools
-- **Note**: Simplified with mcp-go v0.33.0's built-in discovery mechanisms
+- **OpenID Connect Discovery**: Custom client for fetching OAuth provider metadata
+- **JWKS Integration**: Fetch and parse JSON Web Key Sets for token validation
+- **Configuration Management**: OAuth provider configuration and validation
+- **Environment Integration**: Load OAuth settings from environment variables
+- **Public Key Extraction**: Parse RSA public keys from JWKS for JWT validation
 
 ### 4. HTTP Authentication Middleware (`internal/middleware/auth.go`)
-- **mcp-go v0.33.0 Middleware**: Use built-in authentication middleware
-- **Automatic Token Processing**: Leverage mcp-go's Bearer token extraction
-- **User Context Injection**: Use mcp-go's standardized user context handling
-- **HTTP Status Codes**: Rely on mcp-go's compliant 401/403 error responses
-- **Permission Validation**: Integrate with mcp-go's authorization framework
+- **Custom Authentication Middleware**: Bearer token extraction and validation
+- **User Context Injection**: Add authenticated user context to requests
+- **HTTP Status Codes**: Proper 401/403 error responses
+- **Security Headers**: CORS, security headers, and authentication headers
+- **Conditional Authentication**: OAuth mode vs basic auth mode selection
 
 ### 5. Simplified Trino Client Integration (`internal/trino/client.go`)
 - **OAuth Mode**: Use existing basic auth or anonymous connection to Trino (unchanged)
@@ -146,12 +137,12 @@ type TrinoConfig struct {
 - No token refresh logic needed (handled by Claude Code/mcp-remote)
 - Trino connection method remains independent of OAuth authentication
 
-### 6. Simplified HTTP Transport Updates (`cmd/main.go`)
-- **mcp-go v0.33.0 Server**: Use built-in OAuth-enabled HTTP server
-- **Authentication Integration**: Leverage mcp-go's authentication middleware
-- **Configuration-Driven**: Use mcp-go's configuration-based auth method selection
-- **Standard HTTP Responses**: Rely on mcp-go's compliant error handling
-- **Remote Access**: Built-in support for remote MCP server deployment
+### 6. HTTP Transport Updates (`cmd/main.go`)
+- **OAuth Integration**: Custom authentication middleware integration
+- **Middleware Stack**: Security headers, CORS, logging, and authentication
+- **Configuration-Driven**: OAuth vs basic auth mode selection
+- **Error Handling**: Proper HTTP status codes and error responses
+- **Remote Access**: HTTP server setup for remote MCP client connections
 
 ## Authentication Configuration Options
 
@@ -291,32 +282,30 @@ claude mcp add https://your-mcp-server.com:8080
 - Scenarios requiring custom authentication flows beyond OAuth 2.1
 - Use cases requiring direct MCP server access without OAuth (use basic auth mode instead)
 
-## Simplified Implementation Order with mcp-go v0.33.0
+## Implementation Order
 
-1. **Upgrade mcp-go**: Update to v0.33.0 for OAuth 2.1 support
+1. **Upgrade mcp-go**: Update to v0.33.0 for enhanced MCP protocol support
    ```bash
    go get github.com/mark3labs/mcp-go@v0.33.0
    go mod tidy
    ```
-2. **Enhance TrinoConfig**: Add simple OAuth fields to existing TrinoConfig structure
-3. **Integrate OAuth Middleware**: Use mcp-go v0.33.0's built-in authentication middleware
-4. **Bearer Token Validation**: Leverage mcp-go's JWT token validation capabilities
-5. **HTTP Transport**: Configure mcp-go's OAuth-enabled HTTP server
-6. **Trino Integration**: Keep existing Trino connection method (basic auth/anonymous)
-7. **Mode Selection**: Implement configuration-based authentication method selection
+2. **Enhance TrinoConfig**: Add OAuth configuration fields
+3. **Implement Bearer Token Validation**: Custom JWT validation using golang-jwt/jwt
+4. **Create OAuth Discovery Client**: OpenID Connect Discovery and JWKS fetching
+5. **Build Authentication Middleware**: Custom middleware for Bearer token handling
+6. **Update HTTP Transport**: Integrate middleware stack with OAuth support
+7. **Add Environment Configuration**: OAuth provider and client configuration
 8. **Testing**: Test with Claude Code native OAuth and mcp-remote for compatibility
 
-**Key Simplifications with mcp-go v0.33.0:**
-- **Built-in OAuth Server** - mcp-go v0.33.0 provides complete OAuth 2.1 implementation
-- **No OAuth discovery needed** - Claude Code/mcp-remote handles this
-- **No browser integration** - Claude Code/mcp-remote handles OAuth flows
-- **No token storage** - Claude Code/mcp-remote manages tokens
-- **No PKCE implementation** - Built into mcp-go v0.33.0
-- **No Resource Indicators** - Built into mcp-go v0.33.0 MCP Authorization spec
-- **Simplified Bearer token validation** - Use mcp-go's built-in JWT processing
+**Key Implementation Details:**
+- **Custom OAuth Resource Server** - We implement server-side OAuth validation (mcp-go provides client-side only)
+- **Client-Side OAuth Handled by Claude Code/mcp-remote** - No server-side OAuth flows needed
+- **JWT Token Validation** - Custom implementation using golang-jwt/jwt library
+- **OpenID Connect Discovery** - Custom client for OAuth provider metadata
+- **Bearer Token Middleware** - Custom authentication middleware
 - **No Trino OAuth setup** - MCP server acts as authorization gateway
 
-This approach provides a dramatically simplified OAuth implementation by leveraging both mcp-go v0.33.0's built-in capabilities and Claude Code/mcp-remote for OAuth complexity while maintaining two distinct authentication modes.
+This approach provides OAuth 2.1 authentication by implementing the server-side OAuth resource server functionality that mcp-go doesn't provide, while leveraging Claude Code/mcp-remote for client-side OAuth complexity.
 
 ## Current Authentication Implementation
 
@@ -372,15 +361,16 @@ The `github.com/trinodb/trino-go-client` v0.323.0 supports several authenticatio
 - **No Authorization**: No user-based access control or permissions
 - **No Session Management**: No token refresh or session handling
 
-## Key Integration Points for OAuth Implementation with mcp-go v0.33.0
+## Key Integration Points for OAuth Implementation
 
-Based on the current architecture, OAuth/JWT authentication with mcp-go v0.33.0 would need to be added at:
+Based on the current architecture, OAuth/JWT authentication needs to be added at:
 
-1. **Library Upgrade**: Update to mcp-go v0.33.0 for OAuth 2.1 support
-2. **Config Layer**: Add OAuth/JWT configuration parameters using mcp-go's configuration system
-3. **Middleware Layer**: Integrate mcp-go's built-in authentication middleware
-4. **Handler Layer**: Use mcp-go's standardized authenticated request handling
-5. **Transport Layer**: Configure mcp-go's OAuth-enabled HTTP server
-6. **MCP Layer**: Leverage mcp-go's authentication context for tool calls
+1. **Library Upgrade**: Update to mcp-go v0.33.0 for enhanced MCP protocol support
+2. **Config Layer**: Add OAuth/JWT configuration parameters
+3. **Authentication Layer**: Implement custom JWT validation and Bearer token handling
+4. **Middleware Layer**: Create custom authentication middleware
+5. **Handler Layer**: Add authentication logging and user context handling
+6. **Transport Layer**: Integrate authentication middleware with HTTP server
+7. **Discovery Layer**: Implement OAuth provider discovery and JWKS fetching
 
-The current codebase provides a solid foundation for adding OAuth/JWT authentication, and mcp-go v0.33.0 provides the necessary OAuth 2.1 infrastructure to significantly simplify the implementation.
+The current codebase provides a solid foundation for adding OAuth/JWT authentication. Since mcp-go v0.33.0 provides client-side OAuth capabilities but no server-side authentication, we implement the necessary server-side OAuth resource server functionality.
