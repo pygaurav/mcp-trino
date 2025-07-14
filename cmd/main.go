@@ -24,12 +24,7 @@ var (
 	Version = "dev"
 )
 
-// Context keys
-type contextKey string
-
-const (
-	oauthTokenKey contextKey = "oauth_token"
-)
+// Context keys are now imported from auth package
 
 func main() {
 	log.Println("Starting Trino MCP Server...")
@@ -64,17 +59,32 @@ func main() {
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			token := strings.TrimPrefix(authHeader, "Bearer ")
-			ctx = context.WithValue(ctx, oauthTokenKey, token)
-			log.Printf("OAuth: Token extracted from request")
+			// Clean any whitespace
+			token = strings.TrimSpace(token)
+			ctx = auth.WithOAuthToken(ctx, token)
+			log.Printf("OAuth: Token extracted from request (length: %d)", len(token))
+		} else if authHeader != "" {
+			preview := authHeader
+			if len(authHeader) > 30 {
+				preview = authHeader[:30] + "..."
+			}
+			log.Printf("OAuth: Invalid Authorization header format: %s", preview)
 		}
 		return ctx
 	}
 
 	// Create MCP server with OAuth middleware
 	log.Println("Initializing MCP server...")
+	
+	// Create hooks for server-level authentication
+	hooks := &server.Hooks{}
+	if trinoConfig.OAuthEnabled {
+		hooks.AddOnRequestInitialization(auth.CreateRequestAuthHook())
+	}
+	
 	mcpServer := server.NewMCPServer("Trino MCP Server", Version,
 		server.WithToolCapabilities(true),
-		server.WithToolHandlerMiddleware(auth.OAuthMiddleware(trinoConfig.OAuthEnabled)),
+		server.WithHooks(hooks),
 	)
 
 	// Initialize tool handlers

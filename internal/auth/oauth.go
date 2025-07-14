@@ -19,33 +19,46 @@ const (
 	userContextKey contextKey = "user"
 )
 
+// WithOAuthToken adds an OAuth token to the context
+func WithOAuthToken(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, oauthTokenKey, token)
+}
+
+// GetOAuthToken extracts an OAuth token from the context
+func GetOAuthToken(ctx context.Context) (string, bool) {
+	token, ok := ctx.Value(oauthTokenKey).(string)
+	return token, ok
+}
+
 // OAuthMiddleware creates an authentication middleware for MCP tools
 func OAuthMiddleware(enabled bool) func(server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if !enabled {
 				// OAuth disabled, allow all requests
+				log.Printf("OAuth: Authentication disabled - allowing tool: %s", req.Params.Name)
 				return next(ctx, req)
 			}
 
-			// Extract token from context (set by SSE context function)
-			token := ctx.Value(oauthTokenKey)
-			if token == nil {
+			// Extract token from context (set by HTTP context function)
+			tokenString, ok := GetOAuthToken(ctx)
+			if !ok {
 				log.Printf("OAuth: No token found in context for tool: %s", req.Params.Name)
-				return nil, fmt.Errorf("authentication required")
+				return nil, fmt.Errorf("authentication required: missing OAuth token")
 			}
 
-			tokenString, ok := token.(string)
-			if !ok {
-				log.Printf("OAuth: Invalid token type in context for tool: %s", req.Params.Name)
-				return nil, fmt.Errorf("invalid token format")
+			// Log token for debugging (first 50 chars)
+			tokenPreview := tokenString
+			if len(tokenString) > 50 {
+				tokenPreview = tokenString[:50] + "..."
 			}
+			log.Printf("OAuth: Received token: %s", tokenPreview)
 
 			// Basic JWT validation (simplified)
 			user, err := validateJWT(tokenString)
 			if err != nil {
 				log.Printf("OAuth: Token validation failed for tool %s: %v", req.Params.Name, err)
-				return nil, fmt.Errorf("invalid token: %w", err)
+				return nil, fmt.Errorf("authentication failed: %w", err)
 			}
 
 			// Add user to context
@@ -107,4 +120,33 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 func GetUserFromContext(ctx context.Context) (*User, bool) {
 	user, ok := ctx.Value(userContextKey).(*User)
 	return user, ok
+}
+
+// CreateRequestAuthHook creates a server-level authentication hook for all MCP requests
+func CreateRequestAuthHook() func(context.Context, interface{}, interface{}) error {
+	return func(ctx context.Context, id interface{}, message interface{}) error {
+		// Extract token from context (set by HTTP context function)
+		tokenString, ok := GetOAuthToken(ctx)
+		if !ok {
+			log.Printf("OAuth: No token found in context for request ID: %v", id)
+			return fmt.Errorf("authentication required: missing OAuth token")
+		}
+
+		// Log token for debugging (first 50 chars)
+		tokenPreview := tokenString
+		if len(tokenString) > 50 {
+			tokenPreview = tokenString[:50] + "..."
+		}
+		log.Printf("OAuth: Received token for request ID %v: %s", id, tokenPreview)
+
+		// Basic JWT validation (simplified)
+		user, err := validateJWT(tokenString)
+		if err != nil {
+			log.Printf("OAuth: Token validation failed for request ID %v: %v", id, err)
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+
+		log.Printf("OAuth: Authenticated user %s for request ID: %v", user.Username, id)
+		return nil // Allow request to proceed
+	}
 }
