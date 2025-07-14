@@ -27,35 +27,46 @@ Based on the Trino Go client documentation and current codebase analysis, here's
 6. **Bearer Token Authentication**: Use `Authorization: Bearer <token>` header
 7. **HTTPS Enforcement**: All authorization endpoints must use HTTPS
 
-### 1. MCP-Compliant OAuth Configuration (`internal/config/config.go`)
+### 1. Enhanced TrinoConfig with OAuth Support (`internal/config/config.go`)
 ```go
-type OAuthConfig struct {
-    Enabled       bool   `env:"TRINO_OAUTH_ENABLED" default:"false"`
-    TrinoURL      string `env:"TRINO_URL"` // Base Trino server URL for discovery
-    LocalPort     int    `env:"TRINO_OAUTH_PORT" default:"8080"` // Local callback port
-    RefreshBuffer int    `env:"TRINO_OAUTH_REFRESH_BUFFER" default:"300"` // seconds
+// TrinoConfig holds Trino connection parameters
+type TrinoConfig struct {
+    // Basic connection parameters
+    Host              string
+    Port              int
+    User              string
+    Password          string
+    Catalog           string
+    Schema            string
+    Scheme            string
+    SSL               bool
+    SSLInsecure       bool
+    AllowWriteQueries bool          // Controls whether non-read-only SQL queries are allowed
+    QueryTimeout      time.Duration // Query execution timeout
+    
+    // OAuth 2.1 configuration
+    OAuthEnabled       bool   `env:"TRINO_OAUTH_ENABLED" default:"false"`
+    OAuthLocalPort     int    `env:"TRINO_OAUTH_PORT" default:"8080"` // Local callback port
+    OAuthRefreshBuffer int    `env:"TRINO_OAUTH_REFRESH_BUFFER" default:"300"` // seconds
     
     // MCP Resource Indicator (RFC 8707) - canonical URI for this MCP server
-    ResourceIndicator string // Generated from TrinoURL
+    // Generated from Host:Port when OAuth is enabled
+    OAuthResourceIndicator string // Generated from existing Host/Port/Scheme
     
     // Auto-discovered from Trino's .well-known/oauth-authorization-server
-    ClientID      string // Discovered automatically
-    AuthURL       string // Discovered automatically  
-    TokenURL      string // Discovered automatically
-    Scopes        string // Discovered automatically
-    
-    // MCP-specific OAuth 2.1 settings
-    PKCEEnabled   bool   `default:"true"` // Always enabled for security
-    HTTPSRequired bool   `default:"true"` // MCP requires HTTPS
+    OAuthClientID      string // Discovered automatically
+    OAuthAuthURL       string // Discovered automatically  
+    OAuthTokenURL      string // Discovered automatically
+    OAuthScopes        string // Discovered automatically
 }
 ```
 
 ### 2. MCP-Compliant OAuth Discovery (`internal/oauth/discovery.go`)
-- Fetch OAuth configuration from Trino's `.well-known/oauth-authorization-server`
+- Fetch OAuth configuration from `{scheme}://{host}:{port}/.well-known/oauth-authorization-server`
 - Parse authorization server metadata (RFC 8414)
 - Validate HTTPS endpoints (MCP requirement)
 - Configure OAuth client automatically
-- Generate Resource Indicator URI from Trino URL
+- Generate Resource Indicator URI from existing Host/Port/Scheme
 - Handle discovery errors gracefully
 
 ### 3. MCP-Compliant Browser Authentication (`internal/oauth/browser.go`)
@@ -74,40 +85,43 @@ type OAuthConfig struct {
 - Secure token storage (keyring/encrypted file)
 - Validate token audience matches Resource Indicator
 - Implement OAuth 2.1 security measures
-- Fallback to basic auth when OAuth disabled
 
-### 5. MCP-Compliant Trino Client Integration (`internal/trino/client.go`)
-- Use `AccessToken` field instead of username/password in DSN
-- Remove basic auth credentials when OAuth enabled
-- Handle token refresh failures gracefully
-- Ensure HTTPS connections (MCP requirement)
+### 5. Authentication-Aware Trino Client Integration (`internal/trino/client.go`)
+- **OAuth Mode**: Use `AccessToken` field in Trino client config
+- **Basic Auth Mode**: Use username/password in DSN
+- Connection method determined by `TrinoConfig.OAuthEnabled`
+- Handle token refresh failures for OAuth mode
+- Ensure HTTPS connections for OAuth (MCP requirement)
 
 ### 6. MCP Handler Authentication (`internal/handlers/middleware.go`)
-- **REQUIRED**: Validate incoming Bearer tokens for HTTP transport
-- Return 401 Unauthorized for missing/invalid tokens
-- Return 403 Forbidden for insufficient permissions
-- Extract user context from JWT claims
+- **OAuth Mode**: Validate incoming Bearer tokens for HTTP transport
+- **Basic Auth Mode**: No additional authentication required
+- Return 401 Unauthorized for missing/invalid tokens (OAuth mode)
+- Return 403 Forbidden for insufficient permissions (OAuth mode)
+- Extract user context from JWT claims (OAuth) or config (Basic)
 - Pass user information to Trino queries via `X-Trino-User` header
-- Validate token audience matches MCP server Resource Indicator
+- Validate token audience matches MCP server Resource Indicator (OAuth mode)
 
-### 7. MCP-Compliant HTTP Transport Updates (`cmd/main.go`)
-- **REQUIRED**: Support Bearer token authentication on all endpoints
-- Use `Authorization: Bearer <token>` header format
-- Add authentication middleware to HTTP handlers
+### 7. Authentication-Aware HTTP Transport Updates (`cmd/main.go`)
+- **OAuth Mode**: Support Bearer token authentication on all endpoints
+- **Basic Auth Mode**: Use existing authentication approach
+- Authentication method determined by configuration
+- Use `Authorization: Bearer <token>` header format (OAuth mode)
 - Return proper HTTP error codes (401, 403, 400)
-- Enforce HTTPS for all authorization endpoints
-- Maintain backward compatibility with basic auth for non-MCP clients
+- Enforce HTTPS for OAuth authorization endpoints
 
-## Simplified User Experience
+## Authentication Configuration Options
 
-### For Claude Desktop Users
+### Option 1: OAuth 2.1 Authentication (Recommended)
 ```json
 {
   "mcpServers": {
     "trino": {
       "command": "mcp-trino",
       "env": {
-        "TRINO_URL": "https://trino.example.com",
+        "TRINO_HOST": "trino.example.com",
+        "TRINO_PORT": "443",
+        "TRINO_SCHEME": "https",
         "TRINO_OAUTH_ENABLED": "true"
       }
     }
@@ -115,10 +129,28 @@ type OAuthConfig struct {
 }
 ```
 
-### MCP-Compliant Authentication Flow
+### Option 2: Basic Authentication (Current/Legacy)
+```json
+{
+  "mcpServers": {
+    "trino": {
+      "command": "mcp-trino",
+      "env": {
+        "TRINO_HOST": "trino.example.com",
+        "TRINO_PORT": "443",
+        "TRINO_USER": "myuser",
+        "TRINO_PASSWORD": "mypassword",
+        "TRINO_SSL": "true"
+      }
+    }
+  }
+}
+```
+
+### OAuth 2.1 Authentication Flow
 1. **First Run**: MCP server detects no stored tokens
-2. **Auto-Discovery**: Fetches OAuth config from `https://trino.example.com/.well-known/oauth-authorization-server`
-3. **Resource Indicator**: Generates canonical URI for MCP server (e.g., `https://trino.example.com/mcp`)
+2. **Auto-Discovery**: Fetches OAuth config from `{scheme}://{host}:{port}/.well-known/oauth-authorization-server`
+3. **Resource Indicator**: Generates canonical URI for MCP server (e.g., `https://trino.example.com:443/mcp`)
 4. **Browser Launch**: Opens browser to OAuth authorization URL with PKCE + Resource Indicator
 5. **User Login**: User authenticates with their OAuth provider (Google, Azure AD, etc.)
 6. **Token Exchange**: Exchanges authorization code for tokens with Resource Indicator
@@ -128,10 +160,10 @@ type OAuthConfig struct {
 
 ## Key Implementation Details
 
-### Token Management
+### Token Management (OAuth Mode Only)
 - **Storage**: Secure local storage (OS keyring or encrypted file)
 - **Refresh Strategy**: Refresh when token expires within buffer time
-- **Error Handling**: Fallback to basic auth on OAuth failures
+- **Error Handling**: Return authentication errors - no fallback
 - **Concurrency**: Thread-safe token access with mutex
 
 ### MCP-Compliant Security Considerations
@@ -146,36 +178,38 @@ type OAuthConfig struct {
 - **Error Logging**: Log OAuth failures without exposing sensitive data
 - **Token Passthrough Prevention**: Validate tokens are for this specific MCP server
 
-### Configuration Priority
-1. OAuth (when enabled and properly configured)
-2. Basic Auth (fallback when OAuth disabled/failed)
-3. Anonymous (when no credentials provided)
+### Authentication Method Selection
+- **OAuth 2.1**: When `TRINO_OAUTH_ENABLED=true`
+- **Basic Auth**: When `TRINO_OAUTH_ENABLED=false` or not set
+- **Anonymous**: When no credentials provided (uses default "trino" user)
 
-## Benefits of This Simplified Approach
+## Benefits of This Approach
 
-1. **User-Friendly**: Only requires Trino server URL - no complex OAuth configuration
+1. **User-Friendly**: OAuth requires only Trino server URL - no complex configuration
 2. **Automatic Discovery**: Fetches OAuth configuration from Trino's well-known endpoint
 3. **Secure**: Uses PKCE flow - no client secrets needed
 4. **Persistent**: Securely stores tokens for seamless subsequent use
 5. **Trino Compatibility**: Leverages existing JWT support in Trino Go client
-6. **Backward Compatibility**: Maintains existing basic auth functionality
+6. **Clear Separation**: OAuth and basic auth are separate modes - no mixing
 7. **Cross-Platform**: Works on macOS, Windows, and Linux
+8. **MCP Compliant**: Meets June 2025 MCP specification requirements
 
 ## MCP-Compliant Implementation Order
 
-1. **OAuth Discovery**: Implement automatic OAuth provider discovery with RFC 8414 support
-2. **Resource Indicators**: Implement RFC 8707 Resource Indicators for token scoping
-3. **Browser Authentication**: Create PKCE-based browser authentication flow
-4. **Token Storage**: Implement secure token storage and retrieval
-5. **Token Validation**: Add audience validation and OAuth 2.1 security measures
-6. **Trino Integration**: Connect OAuth tokens to Trino client
-7. **MCP Handler Authentication**: Add required authentication for HTTP transport
-8. **Error Handling**: Implement proper HTTP error codes (401, 403, 400)
-9. **HTTPS Enforcement**: Ensure all authorization endpoints use HTTPS
-10. **Fallback Handling**: Ensure graceful fallback to basic auth
-11. **Testing**: Comprehensive testing with various OAuth providers
+1. **Enhance TrinoConfig**: Add OAuth fields to existing TrinoConfig structure
+2. **OAuth Discovery**: Implement automatic OAuth provider discovery with RFC 8414 support
+3. **Resource Indicators**: Implement RFC 8707 Resource Indicators for token scoping
+4. **Browser Authentication**: Create PKCE-based browser authentication flow
+5. **Token Storage**: Implement secure token storage and retrieval
+6. **Token Validation**: Add audience validation and OAuth 2.1 security measures
+7. **Trino Integration**: Connect OAuth tokens to Trino client (OAuth mode)
+8. **MCP Handler Authentication**: Add OAuth authentication for HTTP transport
+9. **Error Handling**: Implement proper HTTP error codes (401, 403, 400)
+10. **HTTPS Enforcement**: Ensure OAuth authorization endpoints use HTTPS
+11. **Mode Selection**: Implement authentication method selection logic
+12. **Testing**: Comprehensive testing with both OAuth and basic auth modes
 
-This MCP-compliant approach reduces user configuration to just the Trino server URL while providing enterprise-grade security that meets the latest MCP specification requirements.
+This approach provides two distinct authentication modes: OAuth 2.1 for modern security and basic auth for existing deployments, with clear separation between the two.
 
 ## Current Authentication Implementation
 
