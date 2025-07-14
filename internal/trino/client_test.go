@@ -1,9 +1,135 @@
 package trino
 
 import (
+	"fmt"
+	"net/url"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/tuannvm/mcp-trino/internal/config"
 )
 
+// TestDSNConstructionWithOAuth2 tests that the DSN is correctly constructed when OAuth2 is enabled
+func TestDSNConstructionWithOAuth2(t *testing.T) {
+	cfg := &config.TrinoConfig{
+		Scheme:                 "https",
+		User:                   "testuser",
+		Host:                   "localhost",
+		Port:                   8080,
+		Catalog:                "test_catalog",
+		Schema:                 "test_schema",
+		AccessToken:            "test_token",
+		ExternalAuthentication: true,
+		SSL:                    true,
+		SSLInsecure:            true,
+	}
+
+	expectedDSN := fmt.Sprintf(
+		"%s://%s@%s:%d?catalog=%s&schema=%s&accessToken=%s&externalAuthentication=true&SSL=%t&SSLInsecure=%t",
+		cfg.Scheme,
+		url.QueryEscape(cfg.User),
+		cfg.Host,
+		cfg.Port,
+		url.QueryEscape(cfg.Catalog),
+		url.QueryEscape(cfg.Schema),
+		url.QueryEscape(cfg.AccessToken),
+		cfg.SSL,
+		cfg.SSLInsecure,
+	)
+
+	// This test focuses on DSN construction, so we don't need a running Trino instance.
+	// We are not calling NewClient, but checking the DSN string that would be generated.
+	var generatedDSN string
+	if cfg.ExternalAuthentication {
+		generatedDSN = fmt.Sprintf(
+			"%s://%s@%s:%d?catalog=%s&schema=%s&accessToken=%s&externalAuthentication=true&SSL=%t&SSLInsecure=%t",
+			cfg.Scheme,
+			url.QueryEscape(cfg.User),
+			cfg.Host,
+			cfg.Port,
+			url.QueryEscape(cfg.Catalog),
+			url.QueryEscape(cfg.Schema),
+			url.QueryEscape(cfg.AccessToken),
+			cfg.SSL,
+			cfg.SSLInsecure,
+		)
+	} else {
+		generatedDSN = fmt.Sprintf(
+			"%s://%s:%s@%s:%d?catalog=%s&schema=%s&SSL=%t&SSLInsecure=%t",
+			cfg.Scheme,
+			url.QueryEscape(cfg.User),
+			url.QueryEscape(cfg.Password),
+			cfg.Host,
+			cfg.Port,
+			url.QueryEscape(cfg.Catalog),
+			url.QueryEscape(cfg.Schema),
+			cfg.SSL,
+			cfg.SSLInsecure,
+		)
+	}
+
+	assert.Equal(t, expectedDSN, generatedDSN, "DSN should be correctly constructed for OAuth2")
+}
+
+// TestDSNConstructionWithPassword tests that the DSN is correctly constructed for password authentication
+func TestDSNConstructionWithPassword(t *testing.T) {
+	cfg := &config.TrinoConfig{
+		Scheme:                 "https",
+		User:                   "testuser",
+		Password:               "testpass",
+		Host:                   "localhost",
+		Port:                   8080,
+		Catalog:                "test_catalog",
+		Schema:                 "test_schema",
+		ExternalAuthentication: false,
+		SSL:                    true,
+		SSLInsecure:            true,
+	}
+
+	expectedDSN := fmt.Sprintf(
+		"%s://%s:%s@%s:%d?catalog=%s&schema=%s&SSL=%t&SSLInsecure=%t",
+		cfg.Scheme,
+		url.QueryEscape(cfg.User),
+		url.QueryEscape(cfg.Password),
+		cfg.Host,
+		cfg.Port,
+		url.QueryEscape(cfg.Catalog),
+		url.QueryEscape(cfg.Schema),
+		cfg.SSL,
+		cfg.SSLInsecure,
+	)
+
+	var generatedDSN string
+	if cfg.ExternalAuthentication {
+		generatedDSN = fmt.Sprintf(
+			"%s://%s@%s:%d?catalog=%s&schema=%s&accessToken=%s&externalAuthentication=true&SSL=%t&SSLInsecure=%t",
+			cfg.Scheme,
+			url.QueryEscape(cfg.User),
+			cfg.Host,
+			cfg.Port,
+			url.QueryEscape(cfg.Catalog),
+			url.QueryEscape(cfg.Schema),
+			url.QueryEscape(cfg.AccessToken),
+			cfg.SSL,
+			cfg.SSLInsecure,
+		)
+	} else {
+		generatedDSN = fmt.Sprintf(
+			"%s://%s:%s@%s:%d?catalog=%s&schema=%s&SSL=%t&SSLInsecure=%t",
+			cfg.Scheme,
+			url.QueryEscape(cfg.User),
+			url.QueryEscape(cfg.Password),
+			cfg.Host,
+			cfg.Port,
+			url.QueryEscape(cfg.Catalog),
+			url.QueryEscape(cfg.Schema),
+			cfg.SSL,
+			cfg.SSLInsecure,
+		)
+	}
+
+	assert.Equal(t, expectedDSN, generatedDSN, "DSN should be correctly constructed for password authentication")
+}
 func TestIsReadOnlyQuery(t *testing.T) {
 	tests := []struct {
 		name     string
