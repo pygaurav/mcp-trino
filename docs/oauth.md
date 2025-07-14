@@ -2,6 +2,26 @@
 
 Based on the Trino Go client documentation and current codebase analysis, here's a comprehensive plan for implementing OAuth support:
 
+## Prerequisites
+
+**IMPORTANT: Trino Cluster OAuth Configuration Required**
+
+Before implementing OAuth in the MCP server, you must have a Trino cluster that is already configured with OAuth authentication. This includes:
+
+1. **Trino Server OAuth Setup**: Trino coordinator must be configured with OAuth authentication
+2. **OAuth Provider**: A configured OAuth provider (Google, Azure AD, Okta, etc.)
+3. **Well-Known Endpoint**: Trino must expose OAuth metadata at `/.well-known/oauth-authorization-server`
+4. **JWT Support**: Trino must be configured to accept JWT tokens for authentication
+
+### Trino OAuth Configuration Example
+```properties
+# coordinator/config.properties
+http-server.authentication.type=oauth2
+http-server.authentication.oauth2.issuer=https://your-oauth-provider.com
+http-server.authentication.oauth2.client-id=your-client-id
+http-server.authentication.oauth2.client-secret=your-client-secret
+```
+
 ## Authentication Flow Options
 
 **Recommended: OAuth 2.0 Authorization Code Flow with PKCE (Simplified)**
@@ -10,11 +30,13 @@ Based on the Trino Go client documentation and current codebase analysis, here's
 - Automatic OAuth provider discovery via Trino's well-known endpoint
 - No client secrets needed (PKCE for security)
 - Handles token refresh automatically
+- **Requires**: Trino cluster with OAuth already configured
 
 **Alternative: OAuth 2.0 Client Credentials Flow**
 - For service-to-service authentication scenarios
 - Requires manual OAuth provider configuration
 - More complex setup but suitable for headless environments
+- **Requires**: Trino cluster with OAuth already configured
 
 ## MCP June 2025 Specification Compliance
 
@@ -193,6 +215,19 @@ type TrinoConfig struct {
 6. **Clear Separation**: OAuth and basic auth are separate modes - no mixing
 7. **Cross-Platform**: Works on macOS, Windows, and Linux
 8. **MCP Compliant**: Meets June 2025 MCP specification requirements
+
+## Limitations and Requirements
+
+**Prerequisites:**
+- Trino cluster must already be configured with OAuth authentication
+- OAuth provider (Google, Azure AD, etc.) must be set up and configured in Trino
+- Trino must expose OAuth metadata via well-known endpoint
+- Network connectivity to OAuth provider required during authentication
+
+**Not Suitable For:**
+- Trino clusters without OAuth support
+- Environments where browser access is not available
+- Scenarios requiring custom authentication flows
 
 ## MCP-Compliant Implementation Order
 
