@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -60,6 +61,10 @@ func main() {
 			if err != nil {
 				log.Fatalf("Failed to setup OAuth configuration: %v", err)
 			}
+			
+			// Set client credentials from environment variables
+			oauthConfig.ClientID = getEnv("OAUTH_CLIENT_ID", "")
+			oauthConfig.ClientSecret = getEnv("OAUTH_CLIENT_SECRET", "")
 			
 			// Fetch JWKS for token validation
 			client := oauth.NewOAuthDiscoveryClient()
@@ -159,6 +164,8 @@ func main() {
 				handleOAuthMetadata(w, r, oauthConfig)
 			case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource":
 				handleProtectedResourceMetadata(w, r, oauthConfig)
+			case r.Method == http.MethodPost && r.URL.Path == "/oauth/register":
+				handleDynamicClientRegistration(w, r, oauthConfig)
 			default:
 				http.NotFound(w, r)
 			}
@@ -194,7 +201,8 @@ func main() {
 			if (r.Method == http.MethodGet && r.URL.Path == "/") ||
 				(r.Method == http.MethodGet && (r.URL.Path == "/.well-known/oauth-authorization-server" || r.URL.Path == "/.well-known/openid-configuration")) ||
 				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource") ||
-				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/sse") {
+				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/sse") ||
+				(r.Method == http.MethodPost && r.URL.Path == "/oauth/register") {
 				unauthenticatedHandler.ServeHTTP(w, r)
 			} else if r.URL.Path == "/sse" {
 				// SSE endpoint - handle authentication internally
@@ -325,12 +333,17 @@ func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, oauthConfig *oa
 		"token_endpoint":         oauthConfig.TokenURL,
 		"userinfo_endpoint":      oauthConfig.UserInfoURL,
 		"jwks_uri":               oauthConfig.JWKSURL,
-		"registration_endpoint":  oauthConfig.Issuer + "/v1/clients", // Add dynamic client registration support
+		"registration_endpoint":  fmt.Sprintf("https://%s/oauth/register", r.Host), // Dynamic client registration endpoint
 		"scopes_supported":       oauthConfig.SupportedScopes,
 		"response_types_supported": oauthConfig.SupportedResponseTypes,
 		"grant_types_supported":  oauthConfig.SupportedGrantTypes,
 		"subject_types_supported": []string{"public"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_post", "client_secret_basic"},
+		// PKCE support (OAuth 2.1 requirement)
+		"code_challenge_methods_supported": []string{"S256", "plain"},
+		// MCP-specific client credentials
+		"client_id":     oauthConfig.ClientID,
+		"client_secret": oauthConfig.ClientSecret,
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
@@ -349,10 +362,36 @@ func handleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, oau
 		"client_secret": oauthConfig.ClientSecret,
 		"scopes":        []string{"openid", "profile", "email"},
 		"resource_id":   "mcp-trino",
+		"issuer":        oauthConfig.Issuer,
 	}
 	
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(metadata)
+}
+
+func handleDynamicClientRegistration(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
+	if oauthConfig == nil {
+		http.Error(w, "OAuth not configured", http.StatusNotFound)
+		return
+	}
+	
+	// For simplicity, return the existing client credentials
+	// In a real implementation, you might generate new credentials or validate the request
+	response := map[string]interface{}{
+		"client_id":     oauthConfig.ClientID,
+		"client_secret": oauthConfig.ClientSecret,
+		"client_id_issued_at": time.Now().Unix(),
+		"client_secret_expires_at": 0, // Never expires
+		"redirect_uris": []string{},
+		"response_types": []string{"code"},
+		"grant_types": []string{"authorization_code", "refresh_token"},
+		"token_endpoint_auth_method": "client_secret_post",
+		"scope": "openid profile email",
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func getEnv(key, def string) string {
