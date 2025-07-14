@@ -7,7 +7,6 @@ import (
 	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/tuannvm/mcp-trino/internal/middleware"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -25,8 +24,6 @@ func NewTrinoHandlers(client *trino.Client) *TrinoHandlers {
 
 // ExecuteQuery handles query execution
 func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log authentication info
-	middleware.LogAuthenticationInfo(ctx, "execute_query")
 	
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
@@ -63,8 +60,6 @@ func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRe
 
 // ListCatalogs handles catalog listing
 func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log authentication info
-	middleware.LogAuthenticationInfo(ctx, "list_catalogs")
 	
 	catalogs, err := h.TrinoClient.ListCatalogs()
 	if err != nil {
@@ -85,8 +80,6 @@ func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRe
 
 // ListSchemas handles schema listing
 func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log authentication info
-	middleware.LogAuthenticationInfo(ctx, "list_schemas")
 	
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
@@ -120,8 +113,6 @@ func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolReq
 
 // ListTables handles table listing
 func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log authentication info
-	middleware.LogAuthenticationInfo(ctx, "list_tables")
 	
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
@@ -158,8 +149,6 @@ func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequ
 
 // GetTableSchema handles table schema retrieval
 func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	// Log authentication info
-	middleware.LogAuthenticationInfo(ctx, "get_table_schema")
 	
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})

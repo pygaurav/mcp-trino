@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,15 +9,12 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/tuannvm/mcp-trino/internal/auth"
 	"github.com/tuannvm/mcp-trino/internal/config"
 	"github.com/tuannvm/mcp-trino/internal/handlers"
-	"github.com/tuannvm/mcp-trino/internal/middleware"
-	"github.com/tuannvm/mcp-trino/internal/oauth"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -28,70 +24,19 @@ var (
 	Version = "dev"
 )
 
+// Context keys
+type contextKey string
+
+const (
+	oauthTokenKey contextKey = "oauth_token"
+)
+
 func main() {
 	log.Println("Starting Trino MCP Server...")
 
 	// Initialize Trino configuration
 	log.Println("Loading Trino configuration...")
 	trinoConfig := config.NewTrinoConfig()
-
-	// Initialize OAuth configuration if enabled
-	var bearerValidator *auth.BearerTokenValidator
-	var authMiddleware *middleware.AuthMiddleware
-	var oauthConfig *oauth.OAuthConfig
-	
-	if trinoConfig.OAuthEnabled {
-		log.Println("Setting up OAuth authentication...")
-		
-		// Setup OAuth configuration
-		providerURL := getEnv("OAUTH_PROVIDER_URL", "")
-		if providerURL == "" {
-			log.Println("WARNING: OAUTH_PROVIDER_URL not set. OAuth metadata endpoint will use static configuration.")
-			// Create a basic OAuth config for metadata endpoint
-			oauthConfig = &oauth.OAuthConfig{
-				ProviderURL:  providerURL,
-				ClientID:     getEnv("OAUTH_CLIENT_ID", ""),
-				ClientSecret: getEnv("OAUTH_CLIENT_SECRET", ""),
-				Issuer:       getEnv("OAUTH_ISSUER", providerURL),
-			}
-		} else {
-			ctx := context.Background()
-			var err error
-			oauthConfig, err = oauth.SetupOAuthConfiguration(ctx, providerURL)
-			if err != nil {
-				log.Fatalf("Failed to setup OAuth configuration: %v", err)
-			}
-			
-			// Set client credentials from environment variables
-			oauthConfig.ClientID = getEnv("OAUTH_CLIENT_ID", "")
-			oauthConfig.ClientSecret = getEnv("OAUTH_CLIENT_SECRET", "")
-			
-			// Fetch JWKS for token validation
-			client := oauth.NewOAuthDiscoveryClient()
-			jwks, err := client.FetchJWKS(ctx, oauthConfig.JWKSURL)
-			if err != nil {
-				log.Fatalf("Failed to fetch JWKS: %v", err)
-			}
-			
-			// Get the first RSA key (simplified)
-			if len(jwks.Keys) == 0 {
-				log.Fatal("No keys found in JWKS")
-			}
-			
-			publicKey, err := jwks.Keys[0].GetPublicKey()
-			if err != nil {
-				log.Fatalf("Failed to parse public key: %v", err)
-			}
-			
-			// Create Bearer token validator
-			bearerValidator = auth.NewBearerTokenValidator(publicKey, oauthConfig.Issuer, oauthConfig.ClientID)
-		}
-		
-		// Create authentication middleware
-		authMiddleware = middleware.NewAuthMiddleware(trinoConfig, bearerValidator)
-		
-		log.Println("OAuth authentication setup complete")
-	}
 
 	// Initialize Trino client
 	log.Println("Connecting to Trino server...")
@@ -113,9 +58,24 @@ func main() {
 	}
 	log.Printf("Connected to Trino server. Available catalogs: %s", strings.Join(catalogs, ", "))
 
-	// Create and initialize MCP server
+	// Create OAuth token injection context function
+	contextFunc := func(ctx context.Context, r *http.Request) context.Context {
+		// Extract Bearer token from Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			ctx = context.WithValue(ctx, oauthTokenKey, token)
+			log.Printf("OAuth: Token extracted from request")
+		}
+		return ctx
+	}
+
+	// Create MCP server with OAuth middleware
 	log.Println("Initializing MCP server...")
-	mcpServer := server.NewMCPServer("Trino MCP Server", Version)
+	mcpServer := server.NewMCPServer("Trino MCP Server", Version,
+		server.WithToolCapabilities(true),
+		server.WithToolHandlerMiddleware(auth.OAuthMiddleware(trinoConfig.OAuthEnabled)),
+	)
 
 	// Initialize tool handlers
 	trinoHandlers := handlers.NewTrinoHandlers(trinoClient)
@@ -136,116 +96,67 @@ func main() {
 		}
 	case "http":
 		port := getEnv("MCP_PORT", "9097")
-		host := getEnv("MCP_HOST", "localhost")
 		addr := fmt.Sprintf(":%s", port)
 
-		// Create SSE server
-		log.Println("Setting up SSE server...")
-		baseURL := fmt.Sprintf("http://%s:%s", host, port)
-		sseServer := server.NewSSEServer(
-			mcpServer,
-			server.WithSSEEndpoint("/sse"),
-			server.WithMessageEndpoint("/api/v1"),
-			server.WithKeepAlive(true),
-			server.WithBaseURL(baseURL),
-			server.WithUseFullURLForMessageEndpoint(true),
-		)
-		log.Printf("SSE path: %s", sseServer.CompleteSsePath())
-		log.Printf("Message path: %s", sseServer.CompleteMessagePath())
-
-		// Create separate handlers for authenticated and unauthenticated endpoints
-		unauthenticatedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
-			
-			switch {
-			case r.Method == http.MethodGet && r.URL.Path == "/":
-				handleStatus(w, r)
-			case r.Method == http.MethodGet && (r.URL.Path == "/.well-known/oauth-authorization-server" || r.URL.Path == "/.well-known/openid-configuration" || r.URL.Path == "/.well-known/oauth-authorization-server/sse"):
-				handleOAuthMetadata(w, r, oauthConfig)
-			case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource":
-				handleProtectedResourceMetadata(w, r, oauthConfig)
-			case r.Method == http.MethodPost && r.URL.Path == "/oauth/register":
-				handleDynamicClientRegistration(w, r, oauthConfig)
-			default:
-				http.NotFound(w, r)
-			}
-		})
-
-		// SSE handler - no authentication middleware (MCP handles auth internally)
-		sseHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
-			w.Header().Set("Content-Type", "text/event-stream")
-			sseServer.ServeHTTP(w, r)
-		})
-
-		// Other authenticated endpoints
-		var authenticatedHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
-			
-			switch {
-			case r.Method == http.MethodPost && r.URL.Path == "/api/query":
-				handleTrinoQuery(w, r, trinoClient)
-			default:
-				sseServer.ServeHTTP(w, r)
-			}
-		})
-
-		// Apply authentication middleware only to non-SSE authenticated endpoints
-		if trinoConfig.OAuthEnabled && authMiddleware != nil {
-			authenticatedHandler = authMiddleware.AuthenticateRequest(authenticatedHandler)
-		}
-
-		// Create main router that decides which handler to use
-		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Check if this is an unauthenticated endpoint
-			if (r.Method == http.MethodGet && r.URL.Path == "/") ||
-				(r.Method == http.MethodGet && (r.URL.Path == "/.well-known/oauth-authorization-server" || r.URL.Path == "/.well-known/openid-configuration")) ||
-				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource") ||
-				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/sse") ||
-				(r.Method == http.MethodPost && r.URL.Path == "/oauth/register") {
-				unauthenticatedHandler.ServeHTTP(w, r)
-			} else if r.URL.Path == "/sse" {
-				// SSE endpoint - handle authentication internally
-				sseHandler.ServeHTTP(w, r)
-			} else {
-				authenticatedHandler.ServeHTTP(w, r)
-			}
-		})
-
-		// Apply middleware stack to all requests
-		handler = middleware.LoggingMiddleware(handler)
-		handler = middleware.SecurityHeadersMiddleware(handler)
-		handler = middleware.CORSMiddleware(handler)
+		// Create StreamableHTTP server (modern approach)
+		log.Println("Setting up StreamableHTTP server...")
 		
-		// Apply HTTPS enforcement if OAuth is enabled
-		if trinoConfig.OAuthEnabled {
-			handler = middleware.ConditionalHTTPSEnforcementMiddleware(true)(handler)
-		}
+		// Create StreamableHTTP server instance
+		streamableServer := server.NewStreamableHTTPServer(
+			mcpServer,
+			server.WithEndpointPath("/mcp"),
+			server.WithHTTPContextFunc(contextFunc),
+			server.WithStateLess(false), // Enable session management
+		)
+		
+		// Create HTTP mux for routing
+		mux := http.NewServeMux()
+		
+		// Add status endpoint
+		mux.HandleFunc("/", handleStatus)
+		
+		// Add MCP endpoint with StreamableHTTP
+		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+			// Add CORS headers
+			w.Header().Set("Access-Control-Allow-Origin", "*")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			
+			if r.Method == "OPTIONS" {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			
+			log.Printf("MCP %s %s", r.Method, r.URL.Path)
+			
+			// Handle MCP request using StreamableHTTP server
+			streamableServer.ServeHTTP(w, r)
+		})
 
 		httpServer := &http.Server{
 			Addr:    addr,
-			Handler: handler,
+			Handler: mux,
 		}
 
 		go func() {
-			// Use HTTPS if OAuth is enabled and certificates are available
 			if trinoConfig.OAuthEnabled {
 				certFile := getEnv("HTTPS_CERT_FILE", "")
 				keyFile := getEnv("HTTPS_KEY_FILE", "")
 				
 				if certFile != "" && keyFile != "" {
-					log.Printf("Starting HTTPS server on %s (OAuth enabled)", addr)
+					log.Printf("Starting HTTPS server on %s/mcp (OAuth enabled)", addr)
 					if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 						log.Fatalf("HTTPS server error: %v", err)
 					}
 				} else {
 					log.Printf("WARNING: OAuth is enabled but HTTPS certificates not provided. Running HTTP server (not recommended for production)")
+					log.Printf("Starting HTTP server on %s/mcp", addr)
 					if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 						log.Fatalf("HTTP server error: %v", err)
 					}
 				}
 			} else {
-				log.Printf("Starting HTTP server on %s", addr)
+				log.Printf("Starting HTTP server on %s/mcp", addr)
 				if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("HTTP server error: %v", err)
 				}
@@ -260,31 +171,6 @@ func main() {
 	}
 
 	log.Println("Server shutdown complete")
-}
-
-func handleTrinoQuery(w http.ResponseWriter, r *http.Request, client *trino.Client) {
-	if client == nil {
-		http.Error(w, "Trino client not available", http.StatusServiceUnavailable)
-		return
-	}
-
-	// Log authentication info
-	middleware.LogAuthenticationInfo(r.Context(), "direct query execution")
-	
-	var req struct {
-		Query string `json:"query"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request", http.StatusBadRequest)
-		return
-	}
-	res, err := client.ExecuteQuery(req.Query)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Query failed: %v", err), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(res)
 }
 
 func registerTrinoTools(m *server.MCPServer, h *handlers.TrinoHandlers) {
@@ -315,83 +201,9 @@ func handleSignals(done chan<- bool) {
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
-	status := map[string]string{"status": "ok", "version": Version}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(status)
-}
-
-func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
-	if oauthConfig == nil {
-		http.Error(w, "OAuth not configured", http.StatusNotFound)
-		return
-	}
-	
-	// Create OAuth Authorization Server Metadata (RFC 8414)
-	metadata := map[string]interface{}{
-		"issuer":                 oauthConfig.Issuer,
-		"authorization_endpoint": oauthConfig.AuthorizationURL,
-		"token_endpoint":         oauthConfig.TokenURL,
-		"userinfo_endpoint":      oauthConfig.UserInfoURL,
-		"jwks_uri":               oauthConfig.JWKSURL,
-		"registration_endpoint":  fmt.Sprintf("https://%s/oauth/register", r.Host), // Dynamic client registration endpoint
-		"scopes_supported":       oauthConfig.SupportedScopes,
-		"response_types_supported": oauthConfig.SupportedResponseTypes,
-		"grant_types_supported":  oauthConfig.SupportedGrantTypes,
-		"subject_types_supported": []string{"public"},
-		"token_endpoint_auth_methods_supported": []string{"client_secret_post", "client_secret_basic"},
-		// PKCE support (OAuth 2.1 requirement)
-		"code_challenge_methods_supported": []string{"S256", "plain"},
-		// MCP-specific client credentials
-		"client_id":     oauthConfig.ClientID,
-		"client_secret": oauthConfig.ClientSecret,
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metadata)
-}
-
-func handleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
-	if oauthConfig == nil {
-		http.Error(w, "OAuth not configured", http.StatusNotFound)
-		return
-	}
-	
-	// MCP Protected Resource Metadata with client info
-	metadata := map[string]interface{}{
-		"client_id":     oauthConfig.ClientID,
-		"client_secret": oauthConfig.ClientSecret,
-		"scopes":        []string{"openid", "profile", "email"},
-		"resource_id":   "mcp-trino",
-		"issuer":        oauthConfig.Issuer,
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(metadata)
-}
-
-func handleDynamicClientRegistration(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
-	if oauthConfig == nil {
-		http.Error(w, "OAuth not configured", http.StatusNotFound)
-		return
-	}
-	
-	// For simplicity, return the existing client credentials
-	// In a real implementation, you might generate new credentials or validate the request
-	response := map[string]interface{}{
-		"client_id":     oauthConfig.ClientID,
-		"client_secret": oauthConfig.ClientSecret,
-		"client_id_issued_at": time.Now().Unix(),
-		"client_secret_expires_at": 0, // Never expires
-		"redirect_uris": []string{},
-		"response_types": []string{"code"},
-		"grant_types": []string{"authorization_code", "refresh_token"},
-		"token_endpoint_auth_method": "client_secret_post",
-		"scope": "openid profile email",
-	}
-	
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(response)
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"status":"ok","version":"%s"}`, Version)
 }
 
 func getEnv(key, def string) string {
