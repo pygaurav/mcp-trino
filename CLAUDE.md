@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Tech Stack
 
-- **Language:** Go 1.24.2
+- **Language:** Go 1.24+
 - **Key Dependencies:** 
   - `github.com/mark3labs/mcp-go` v0.25.0 (MCP protocol)
   - `github.com/trinodb/trino-go-client` v0.323.0 (Trino client)
@@ -45,37 +45,42 @@ go test ./internal/handlers  # Test MCP handlers package
 
 ### Core Components
 
-1. **Main Entry Point** (`cmd/main.go:26-134`): 
+1. **Main Entry Point** (`cmd/main.go`): 
    - Server initialization and Trino connection testing
    - Transport selection (STDIO vs HTTP with SSE)
    - Graceful shutdown with signal handling
    - CORS support for web clients
+   - Version management and build metadata
 
-2. **Configuration Layer** (`internal/config/config.go:11-74`): 
+2. **Configuration Layer** (`internal/config/config.go`): 
    - Environment-based configuration with validation
    - Security defaults (HTTPS, read-only queries)
    - Timeout configuration with validation
+   - Connection parameter management
 
-3. **Client Layer** (`internal/trino/client.go:16-233`): 
+3. **Client Layer** (`internal/trino/client.go`): 
    - Database connection management with connection pooling
    - SQL injection protection via read-only query enforcement
    - Context-based timeout handling for queries
+   - Query result processing and formatting
 
-4. **Handler Layer** (`internal/handlers/trino_handlers.go:13-161`): 
+4. **Handler Layer** (`internal/handlers/trino_handlers.go`): 
    - MCP tool implementations with JSON response formatting
    - Parameter validation and error handling
    - Consistent logging for debugging
+   - Tool result standardization
 
 ### Transport Support
 
 - **STDIO Transport**: Direct MCP client integration (default)
 - **HTTP Transport**: REST API with SSE support on `/sse` endpoint
 - **Message Endpoint**: POST `/api/v1` for HTTP-based MCP communication
+- **Query Endpoint**: POST `/api/query` for direct SQL queries
 - **Status Endpoint**: GET `/` returns server status and version
 
 ### SQL Security Architecture
 
-The security model centers around `internal/trino/client.go:73-90` with `isReadOnlyQuery()` function:
+The security model centers around the `isReadOnlyQuery()` function in `internal/trino/client.go`:
 - Allows: SELECT, SHOW, DESCRIBE, EXPLAIN, WITH (CTEs)
 - Blocks: INSERT, UPDATE, DELETE, CREATE, DROP, ALTER by default
 - Override: Set `TRINO_ALLOW_WRITE_QUERIES=true` to bypass (logs warning)
@@ -132,8 +137,9 @@ The GitHub Actions workflow (`.github/workflows/build.yml`) includes:
 ## Manual Testing
 
 - Use `examples/test_query.go` for HTTP API testing
-- Docker Compose setup includes real Trino server
+- Docker Compose setup includes real Trino server  
 - Set `MCP_TRANSPORT=http` and test SSE endpoint at `http://localhost:9097/sse`
+- Test direct query endpoint at `POST /api/query`
 
 ## Build and Release
 
