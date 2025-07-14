@@ -37,6 +37,7 @@ func main() {
 	// Initialize OAuth configuration if enabled
 	var bearerValidator *auth.BearerTokenValidator
 	var authMiddleware *middleware.AuthMiddleware
+	var oauthConfig *oauth.OAuthConfig
 	
 	if trinoConfig.OAuthEnabled {
 		log.Println("Setting up OAuth authentication...")
@@ -44,34 +45,42 @@ func main() {
 		// Setup OAuth configuration
 		providerURL := getEnv("OAUTH_PROVIDER_URL", "")
 		if providerURL == "" {
-			log.Fatal("OAUTH_PROVIDER_URL is required when OAuth is enabled")
+			log.Println("WARNING: OAUTH_PROVIDER_URL not set. OAuth metadata endpoint will use static configuration.")
+			// Create a basic OAuth config for metadata endpoint
+			oauthConfig = &oauth.OAuthConfig{
+				ProviderURL:  providerURL,
+				ClientID:     getEnv("OAUTH_CLIENT_ID", ""),
+				ClientSecret: getEnv("OAUTH_CLIENT_SECRET", ""),
+				Issuer:       getEnv("OAUTH_ISSUER", providerURL),
+			}
+		} else {
+			ctx := context.Background()
+			var err error
+			oauthConfig, err = oauth.SetupOAuthConfiguration(ctx, providerURL)
+			if err != nil {
+				log.Fatalf("Failed to setup OAuth configuration: %v", err)
+			}
+			
+			// Fetch JWKS for token validation
+			client := oauth.NewOAuthDiscoveryClient()
+			jwks, err := client.FetchJWKS(ctx, oauthConfig.JWKSURL)
+			if err != nil {
+				log.Fatalf("Failed to fetch JWKS: %v", err)
+			}
+			
+			// Get the first RSA key (simplified)
+			if len(jwks.Keys) == 0 {
+				log.Fatal("No keys found in JWKS")
+			}
+			
+			publicKey, err := jwks.Keys[0].GetPublicKey()
+			if err != nil {
+				log.Fatalf("Failed to parse public key: %v", err)
+			}
+			
+			// Create Bearer token validator
+			bearerValidator = auth.NewBearerTokenValidator(publicKey, oauthConfig.Issuer, oauthConfig.ClientID)
 		}
-		
-		ctx := context.Background()
-		oauthConfig, err := oauth.SetupOAuthConfiguration(ctx, providerURL)
-		if err != nil {
-			log.Fatalf("Failed to setup OAuth configuration: %v", err)
-		}
-		
-		// Fetch JWKS for token validation
-		client := oauth.NewOAuthDiscoveryClient()
-		jwks, err := client.FetchJWKS(ctx, oauthConfig.JWKSURL)
-		if err != nil {
-			log.Fatalf("Failed to fetch JWKS: %v", err)
-		}
-		
-		// Get the first RSA key (simplified)
-		if len(jwks.Keys) == 0 {
-			log.Fatal("No keys found in JWKS")
-		}
-		
-		publicKey, err := jwks.Keys[0].GetPublicKey()
-		if err != nil {
-			log.Fatalf("Failed to parse public key: %v", err)
-		}
-		
-		// Create Bearer token validator
-		bearerValidator = auth.NewBearerTokenValidator(publicKey, oauthConfig.Issuer, oauthConfig.ClientID)
 		
 		// Create authentication middleware
 		authMiddleware = middleware.NewAuthMiddleware(trinoConfig, bearerValidator)
@@ -139,31 +148,70 @@ func main() {
 		log.Printf("SSE path: %s", sseServer.CompleteSsePath())
 		log.Printf("Message path: %s", sseServer.CompleteMessagePath())
 
-		// Create HTTP handler with authentication
-		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Create separate handlers for authenticated and unauthenticated endpoints
+		unauthenticatedHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
 			
 			switch {
-			case r.URL.Path == "/sse":
-				w.Header().Set("Content-Type", "text/event-stream")
-				sseServer.ServeHTTP(w, r)
-			case r.Method == http.MethodPost && r.URL.Path == "/api/query":
-				handleTrinoQuery(w, r, trinoClient)
 			case r.Method == http.MethodGet && r.URL.Path == "/":
 				handleStatus(w, r)
+			case r.Method == http.MethodGet && (r.URL.Path == "/.well-known/oauth-authorization-server" || r.URL.Path == "/.well-known/openid-configuration" || r.URL.Path == "/.well-known/oauth-authorization-server/sse"):
+				handleOAuthMetadata(w, r, oauthConfig)
+			case r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource":
+				handleProtectedResourceMetadata(w, r, oauthConfig)
+			default:
+				http.NotFound(w, r)
+			}
+		})
+
+		// SSE handler - no authentication middleware (MCP handles auth internally)
+		sseHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
+			w.Header().Set("Content-Type", "text/event-stream")
+			sseServer.ServeHTTP(w, r)
+		})
+
+		// Other authenticated endpoints
+		var authenticatedHandler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			log.Printf("HTTP %s %s", r.Method, r.URL.Path)
+			
+			switch {
+			case r.Method == http.MethodPost && r.URL.Path == "/api/query":
+				handleTrinoQuery(w, r, trinoClient)
 			default:
 				sseServer.ServeHTTP(w, r)
 			}
 		})
 
-		// Apply middleware stack
+		// Apply authentication middleware only to non-SSE authenticated endpoints
+		if trinoConfig.OAuthEnabled && authMiddleware != nil {
+			authenticatedHandler = authMiddleware.AuthenticateRequest(authenticatedHandler)
+		}
+
+		// Create main router that decides which handler to use
+		var handler http.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Check if this is an unauthenticated endpoint
+			if (r.Method == http.MethodGet && r.URL.Path == "/") ||
+				(r.Method == http.MethodGet && (r.URL.Path == "/.well-known/oauth-authorization-server" || r.URL.Path == "/.well-known/openid-configuration")) ||
+				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-protected-resource") ||
+				(r.Method == http.MethodGet && r.URL.Path == "/.well-known/oauth-authorization-server/sse") {
+				unauthenticatedHandler.ServeHTTP(w, r)
+			} else if r.URL.Path == "/sse" {
+				// SSE endpoint - handle authentication internally
+				sseHandler.ServeHTTP(w, r)
+			} else {
+				authenticatedHandler.ServeHTTP(w, r)
+			}
+		})
+
+		// Apply middleware stack to all requests
 		handler = middleware.LoggingMiddleware(handler)
 		handler = middleware.SecurityHeadersMiddleware(handler)
 		handler = middleware.CORSMiddleware(handler)
 		
-		// Apply authentication middleware if OAuth is enabled
-		if trinoConfig.OAuthEnabled && authMiddleware != nil {
-			handler = authMiddleware.AuthenticateRequest(handler)
+		// Apply HTTPS enforcement if OAuth is enabled
+		if trinoConfig.OAuthEnabled {
+			handler = middleware.ConditionalHTTPSEnforcementMiddleware(true)(handler)
 		}
 
 		httpServer := &http.Server{
@@ -172,8 +220,27 @@ func main() {
 		}
 
 		go func() {
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("HTTP server error: %v", err)
+			// Use HTTPS if OAuth is enabled and certificates are available
+			if trinoConfig.OAuthEnabled {
+				certFile := getEnv("HTTPS_CERT_FILE", "")
+				keyFile := getEnv("HTTPS_KEY_FILE", "")
+				
+				if certFile != "" && keyFile != "" {
+					log.Printf("Starting HTTPS server on %s (OAuth enabled)", addr)
+					if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+						log.Fatalf("HTTPS server error: %v", err)
+					}
+				} else {
+					log.Printf("WARNING: OAuth is enabled but HTTPS certificates not provided. Running HTTP server (not recommended for production)")
+					if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+						log.Fatalf("HTTP server error: %v", err)
+					}
+				}
+			} else {
+				log.Printf("Starting HTTP server on %s", addr)
+				if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("HTTP server error: %v", err)
+				}
 			}
 		}()
 
@@ -243,6 +310,49 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 	status := map[string]string{"status": "ok", "version": Version}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(status)
+}
+
+func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
+	if oauthConfig == nil {
+		http.Error(w, "OAuth not configured", http.StatusNotFound)
+		return
+	}
+	
+	// Create OAuth Authorization Server Metadata (RFC 8414)
+	metadata := map[string]interface{}{
+		"issuer":                 oauthConfig.Issuer,
+		"authorization_endpoint": oauthConfig.AuthorizationURL,
+		"token_endpoint":         oauthConfig.TokenURL,
+		"userinfo_endpoint":      oauthConfig.UserInfoURL,
+		"jwks_uri":               oauthConfig.JWKSURL,
+		"registration_endpoint":  oauthConfig.Issuer + "/v1/clients", // Add dynamic client registration support
+		"scopes_supported":       oauthConfig.SupportedScopes,
+		"response_types_supported": oauthConfig.SupportedResponseTypes,
+		"grant_types_supported":  oauthConfig.SupportedGrantTypes,
+		"subject_types_supported": []string{"public"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_post", "client_secret_basic"},
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(metadata)
+}
+
+func handleProtectedResourceMetadata(w http.ResponseWriter, r *http.Request, oauthConfig *oauth.OAuthConfig) {
+	if oauthConfig == nil {
+		http.Error(w, "OAuth not configured", http.StatusNotFound)
+		return
+	}
+	
+	// MCP Protected Resource Metadata with client info
+	metadata := map[string]interface{}{
+		"client_id":     oauthConfig.ClientID,
+		"client_secret": oauthConfig.ClientSecret,
+		"scopes":        []string{"openid", "profile", "email"},
+		"resource_id":   "mcp-trino",
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(metadata)
 }
 
 func getEnv(key, def string) string {

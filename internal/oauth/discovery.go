@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"math/big"
 	"net/http"
-	"os"
+	"strings"
 	"time"
 )
 
@@ -17,48 +17,14 @@ type OAuthConfig struct {
 	ProviderURL            string   `json:"provider_url"`
 	ClientID               string   `json:"client_id"`
 	ClientSecret           string   `json:"client_secret"`
-	RedirectURI            string   `json:"redirect_uri"`
-	Scopes                 string   `json:"scopes"`
-	AuthorizationURL       string   `json:"authorization_url"`
-	TokenURL               string   `json:"token_url"`
-	UserInfoURL            string   `json:"userinfo_url"`
-	JWKSURL                string   `json:"jwks_url"`
 	Issuer                 string   `json:"issuer"`
-	SupportedGrantTypes    []string `json:"supported_grant_types"`
-	SupportedResponseTypes []string `json:"supported_response_types"`
-	SupportedScopes        []string `json:"supported_scopes"`
-}
-
-// DiscoveryDocument represents an OpenID Connect Discovery document
-type DiscoveryDocument struct {
-	Issuer                            string   `json:"issuer"`
-	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-	TokenEndpoint                     string   `json:"token_endpoint"`
-	UserinfoEndpoint                  string   `json:"userinfo_endpoint"`
-	JWKSURI                           string   `json:"jwks_uri"`
-	ScopesSupported                   []string `json:"scopes_supported"`
-	ResponseTypesSupported            []string `json:"response_types_supported"`
-	GrantTypesSupported               []string `json:"grant_types_supported"`
-	SubjectTypesSupported             []string `json:"subject_types_supported"`
-	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
-	TokenEndpointAuthMethodsSupported []string `json:"token_endpoint_auth_methods_supported"`
-	ClaimsSupported                   []string `json:"claims_supported"`
-	CodeChallengeMethodsSupported     []string `json:"code_challenge_methods_supported"`
-}
-
-// JWKSDocument represents a JSON Web Key Set document
-type JWKSDocument struct {
-	Keys []JWK `json:"keys"`
-}
-
-// JWK represents a JSON Web Key
-type JWK struct {
-	Kid string `json:"kid"`
-	Kty string `json:"kty"`
-	Use string `json:"use"`
-	Alg string `json:"alg"`
-	N   string `json:"n"`
-	E   string `json:"e"`
+	AuthorizationURL       string   `json:"authorization_endpoint"`
+	TokenURL               string   `json:"token_endpoint"`
+	UserInfoURL            string   `json:"userinfo_endpoint"`
+	JWKSURL                string   `json:"jwks_uri"`
+	SupportedScopes        []string `json:"scopes_supported"`
+	SupportedResponseTypes []string `json:"response_types_supported"`
+	SupportedGrantTypes    []string `json:"grant_types_supported"`
 }
 
 // OAuthDiscoveryClient handles OAuth provider discovery
@@ -75,167 +41,142 @@ func NewOAuthDiscoveryClient() *OAuthDiscoveryClient {
 	}
 }
 
-// DiscoverProvider discovers OAuth provider configuration using OpenID Connect Discovery
-func (c *OAuthDiscoveryClient) DiscoverProvider(ctx context.Context, providerURL string) (*OAuthConfig, error) {
-	// Construct the well-known discovery URL
-	discoveryURL := fmt.Sprintf("%s/.well-known/openid-configuration", providerURL)
-
-	// Fetch the discovery document
+// SetupOAuthConfiguration discovers OAuth provider configuration
+func SetupOAuthConfiguration(ctx context.Context, providerURL string) (*OAuthConfig, error) {
+	client := NewOAuthDiscoveryClient()
+	
+	// Discover OAuth provider metadata
+	discoveryURL := strings.TrimSuffix(providerURL, "/") + "/.well-known/openid-configuration"
+	
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, discoveryURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create discovery request: %w", err)
 	}
-
-	resp, err := c.httpClient.Do(req)
+	
+	resp, err := client.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch discovery document: %w", err)
+		return nil, fmt.Errorf("failed to fetch discovery metadata: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() { _ = resp.Body.Close() }()
+	
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("discovery request failed with status %d", resp.StatusCode)
+		return nil, fmt.Errorf("discovery request failed with status: %d", resp.StatusCode)
 	}
-
-	// Parse the discovery document
-	var doc DiscoveryDocument
-	if err := json.NewDecoder(resp.Body).Decode(&doc); err != nil {
-		return nil, fmt.Errorf("failed to parse discovery document: %w", err)
+	
+	var metadata map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return nil, fmt.Errorf("failed to decode discovery metadata: %w", err)
 	}
-
-	// Create OAuth configuration
+	
+	// Extract configuration from metadata
 	config := &OAuthConfig{
 		ProviderURL:            providerURL,
-		Issuer:                 doc.Issuer,
-		AuthorizationURL:       doc.AuthorizationEndpoint,
-		TokenURL:               doc.TokenEndpoint,
-		UserInfoURL:            doc.UserinfoEndpoint,
-		JWKSURL:                doc.JWKSURI,
-		SupportedGrantTypes:    doc.GrantTypesSupported,
-		SupportedResponseTypes: doc.ResponseTypesSupported,
-		SupportedScopes:        doc.ScopesSupported,
+		Issuer:                 getStringValue(metadata, "issuer"),
+		AuthorizationURL:       getStringValue(metadata, "authorization_endpoint"),
+		TokenURL:               getStringValue(metadata, "token_endpoint"),
+		UserInfoURL:            getStringValue(metadata, "userinfo_endpoint"),
+		JWKSURL:                getStringValue(metadata, "jwks_uri"),
+		SupportedScopes:        getStringSliceValue(metadata, "scopes_supported"),
+		SupportedResponseTypes: getStringSliceValue(metadata, "response_types_supported"),
+		SupportedGrantTypes:    getStringSliceValue(metadata, "grant_types_supported"),
 	}
-
+	
+	// Validate required fields
+	if config.Issuer == "" || config.AuthorizationURL == "" || config.TokenURL == "" || config.JWKSURL == "" {
+		return nil, fmt.Errorf("incomplete OAuth provider metadata")
+	}
+	
 	return config, nil
 }
 
+// JWK represents a JSON Web Key
+type JWK struct {
+	KeyType   string `json:"kty"`
+	Use       string `json:"use"`
+	KeyID     string `json:"kid"`
+	Algorithm string `json:"alg"`
+	Modulus   string `json:"n"`
+	Exponent  string `json:"e"`
+}
+
+// JWKS represents a JSON Web Key Set
+type JWKS struct {
+	Keys []JWK `json:"keys"`
+}
+
+// GetPublicKey converts a JWK to an RSA public key
+func (jwk *JWK) GetPublicKey() (*rsa.PublicKey, error) {
+	if jwk.KeyType != "RSA" {
+		return nil, fmt.Errorf("unsupported key type: %s", jwk.KeyType)
+	}
+	
+	// Decode base64url-encoded modulus and exponent
+	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.Modulus)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode modulus: %w", err)
+	}
+	
+	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.Exponent)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode exponent: %w", err)
+	}
+	
+	// Convert to big integers
+	n := new(big.Int).SetBytes(nBytes)
+	e := new(big.Int).SetBytes(eBytes)
+	
+	// Create RSA public key
+	pubKey := &rsa.PublicKey{
+		N: n,
+		E: int(e.Int64()),
+	}
+	
+	return pubKey, nil
+}
+
 // FetchJWKS fetches the JSON Web Key Set from the provider
-func (c *OAuthDiscoveryClient) FetchJWKS(ctx context.Context, jwksURL string) (*JWKSDocument, error) {
+func (c *OAuthDiscoveryClient) FetchJWKS(ctx context.Context, jwksURL string) (*JWKS, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, jwksURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create JWKS request: %w", err)
 	}
-
+	
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
 	}
-	defer resp.Body.Close()
-
+	defer func() { _ = resp.Body.Close() }()
+	
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("JWKS request failed with status %d", resp.StatusCode)
+		return nil, fmt.Errorf("JWKS request failed with status: %d", resp.StatusCode)
 	}
-
-	var jwks JWKSDocument
+	
+	var jwks JWKS
 	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
-		return nil, fmt.Errorf("failed to parse JWKS: %w", err)
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
 	}
-
+	
 	return &jwks, nil
 }
 
-// GetPublicKey extracts the RSA public key from JWK
-func (jwk *JWK) GetPublicKey() (*rsa.PublicKey, error) {
-	if jwk.Kty != "RSA" {
-		return nil, fmt.Errorf("unsupported key type: %s", jwk.Kty)
+// getStringValue safely extracts a string value from a map
+func getStringValue(m map[string]interface{}, key string) string {
+	if val, ok := m[key].(string); ok {
+		return val
 	}
-
-	// Parse the RSA public key components using base64 URL decoding
-	nBytes, err := base64.RawURLEncoding.DecodeString(jwk.N)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode N component: %w", err)
-	}
-
-	eBytes, err := base64.RawURLEncoding.DecodeString(jwk.E)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode E component: %w", err)
-	}
-
-	// Convert to big integers
-	n := new(big.Int).SetBytes(nBytes)
-	e := 0
-	for _, b := range eBytes {
-		e = e*256 + int(b)
-	}
-
-	return &rsa.PublicKey{
-		N: n,
-		E: e,
-	}, nil
+	return ""
 }
 
-// ConfigureFromEnvironment creates OAuth configuration from environment variables
-func ConfigureFromEnvironment() (*OAuthConfig, error) {
-	config := &OAuthConfig{
-		ProviderURL:  getEnvOrDefault("OAUTH_PROVIDER_URL", ""),
-		ClientID:     getEnvOrDefault("OAUTH_CLIENT_ID", ""),
-		ClientSecret: getEnvOrDefault("OAUTH_CLIENT_SECRET", ""),
-		RedirectURI:  getEnvOrDefault("OAUTH_REDIRECT_URI", ""),
-		Scopes:       getEnvOrDefault("OAUTH_SCOPES", "openid profile email"),
-	}
-
-	// Validate required fields
-	if config.ProviderURL == "" {
-		return nil, fmt.Errorf("OAUTH_PROVIDER_URL is required")
-	}
-
-	return config, nil
-}
-
-// ValidateConfiguration validates OAuth configuration
-func (c *OAuthConfig) ValidateConfiguration() error {
-	if c.ProviderURL == "" {
-		return fmt.Errorf("provider URL is required")
-	}
-	if c.ClientID == "" {
-		return fmt.Errorf("client ID is required")
-	}
-	if c.ClientSecret == "" {
-		return fmt.Errorf("client secret is required")
-	}
-	if c.RedirectURI == "" {
-		return fmt.Errorf("redirect URI is required")
+// getStringSliceValue safely extracts a string slice value from a map
+func getStringSliceValue(m map[string]interface{}, key string) []string {
+	if val, ok := m[key].([]interface{}); ok {
+		result := make([]string, 0, len(val))
+		for _, v := range val {
+			if str, ok := v.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
 	}
 	return nil
-}
-
-// getEnvOrDefault gets environment variable or returns default value
-func getEnvOrDefault(key, defaultValue string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
-	}
-	return defaultValue
-}
-
-// SetupOAuthConfiguration sets up OAuth configuration with discovery
-func SetupOAuthConfiguration(ctx context.Context, providerURL string) (*OAuthConfig, error) {
-	client := NewOAuthDiscoveryClient()
-
-	// Discover provider configuration
-	config, err := client.DiscoverProvider(ctx, providerURL)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover OAuth provider: %w", err)
-	}
-
-	// Load additional configuration from environment
-	config.ClientID = getEnvOrDefault("OAUTH_CLIENT_ID", "")
-	config.ClientSecret = getEnvOrDefault("OAUTH_CLIENT_SECRET", "")
-	config.RedirectURI = getEnvOrDefault("OAUTH_REDIRECT_URI", "")
-	config.Scopes = getEnvOrDefault("OAUTH_SCOPES", "openid profile email")
-
-	// Validate configuration
-	if err := config.ValidateConfiguration(); err != nil {
-		return nil, fmt.Errorf("invalid OAuth configuration: %w", err)
-	}
-
-	return config, nil
 }

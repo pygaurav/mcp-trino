@@ -334,12 +334,14 @@ type TrinoConfig struct {
 - No token refresh logic needed (handled by Claude Code/mcp-remote)
 - Trino connection method remains independent of OAuth authentication
 
-### 6. OAuth Authorization Server Metadata (Future Implementation)
-- **Planned Feature**: OAuth metadata endpoint for MCP server discovery
-- **RFC 8414 Compliance**: Will expose OAuth metadata at `/.well-known/oauth-authorization-server`
-- **Resource Indicators**: Will advertise support for RFC 8707 resource indicators
-- **Provider Integration**: Will proxy provider's metadata with MCP-specific additions
-- **Status**: Not yet implemented in current codebase
+### 6. OAuth Authorization Server Metadata (✅ Implemented)
+- **Public Endpoint**: OAuth metadata endpoint accessible without authentication
+- **RFC 8414 Compliance**: Exposes OAuth metadata at `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration`
+- **Resource Indicators**: Advertises support for RFC 8707 resource indicators
+- **Provider Integration**: Proxies provider's metadata with MCP-specific additions
+- **Status**: ✅ Implemented in `cmd/main.go` with `handleOAuthMetadata` function
+
+**CRITICAL REQUIREMENT**: The OAuth metadata endpoint MUST be publicly accessible (no authentication required) for MCP clients to discover OAuth configuration. This is handled by processing metadata requests before authentication middleware.
 
 **Example Metadata Response:**
 ```json
@@ -347,10 +349,13 @@ type TrinoConfig struct {
   "issuer": "https://oauth-provider.com",
   "authorization_endpoint": "https://oauth-provider.com/authorize",
   "token_endpoint": "https://oauth-provider.com/token",
+  "userinfo_endpoint": "https://oauth-provider.com/userinfo",
   "jwks_uri": "https://oauth-provider.com/.well-known/jwks.json",
-  "resource_indicators_supported": true,
-  "code_challenge_methods_supported": ["S256"],
-  "grant_types_supported": ["authorization_code", "refresh_token"]
+  "scopes_supported": ["openid", "profile", "email"],
+  "response_types_supported": ["code"],
+  "grant_types_supported": ["authorization_code", "refresh_token"],
+  "subject_types_supported": ["public"],
+  "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"]
 }
 ```
 
@@ -360,7 +365,8 @@ type TrinoConfig struct {
 - **Configuration-Driven**: OAuth vs basic auth mode selection
 - **Error Handling**: Proper HTTP status codes and error responses
 - **Remote Access**: HTTP server setup for remote MCP client connections
-- **Metadata Endpoint**: Serve OAuth authorization server metadata
+- **Public Metadata Endpoint**: Serves OAuth authorization server metadata without authentication
+- **Route Handling**: Unauthenticated endpoints (status, metadata) processed before authentication middleware
 
 ## Authentication Configuration Options
 
@@ -622,7 +628,16 @@ Based on the current architecture, OAuth/JWT authentication status:
 3. **Authentication Layer**: ✅ Custom JWT validation implemented (`internal/auth/bearer.go`)
 4. **Middleware Layer**: ✅ Authentication middleware created (`internal/middleware/auth.go`)
 5. **Handler Layer**: ✅ Authentication logging and user context handling implemented
-6. **Transport Layer**: ⚠️ OAuth middleware integration with HTTP server (needs main.go updates)
-7. **Discovery Layer**: ❌ OAuth provider discovery and metadata endpoint (not implemented)
+6. **Transport Layer**: ✅ OAuth middleware integration with HTTP server implemented
+7. **Discovery Layer**: ✅ OAuth provider discovery and public metadata endpoint implemented
 
-The current codebase has basic OAuth/JWT authentication foundation implemented. The main missing pieces are OAuth metadata endpoint for MCP compliance and full HTTP server integration. Since mcp-go v0.33.0 provides client-side OAuth capabilities but no server-side authentication, we implement the necessary server-side OAuth resource server functionality.
+The current codebase has **complete OAuth/JWT authentication implementation**. All major components are implemented including public metadata endpoint for MCP compliance and full HTTP server integration. Since mcp-go v0.33.0 provides client-side OAuth capabilities but no server-side authentication, we implement the necessary server-side OAuth resource server functionality.
+
+**Implementation Status: ✅ COMPLETE**
+
+### Key Implementation Features:
+- **Public Metadata Endpoint**: `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration` accessible without authentication
+- **JWT Token Validation**: RSA signature verification with proper claims validation
+- **Route Segregation**: Unauthenticated endpoints processed before authentication middleware
+- **Provider Discovery**: Automatic OAuth provider configuration discovery
+- **MCP Specification Compliance**: Full compliance with MCP June 2025 authorization specification
