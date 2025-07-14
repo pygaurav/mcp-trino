@@ -1,6 +1,6 @@
-# OAuth Implementation Plan for Trino MCP Server
+# OAuth Implementation Plan for Trino MCP Server with mcp-remote
 
-Based on the Trino Go client documentation and current codebase analysis, here's a comprehensive plan for implementing OAuth support:
+Based on the Trino Go client documentation and mcp-remote integration analysis, here's a simplified plan for implementing OAuth support using mcp-remote as the authentication proxy:
 
 ## Prerequisites
 
@@ -34,20 +34,33 @@ http-server.authentication.oauth2.refresh-tokens=true
 http-server.authentication.oauth2.user-mapping.pattern=(.*)
 ```
 
+## Architecture Overview
+
+**mcp-remote Proxy Architecture (Recommended)**
+- **Claude Desktop** connects to local `mcp-remote` proxy
+- **mcp-remote** handles OAuth flow and token management
+- **MCP Server** receives authenticated requests with Bearer tokens
+- **Trino Database** uses JWT tokens for authentication
+
+**Benefits of mcp-remote:**
+- No complex OAuth middleware in MCP server
+- Automatic OAuth 2.1 and MCP Authorization specification compliance
+- Built-in PKCE support and token refresh
+- Simplified MCP server implementation
+- Remote deployment ready
+
 ## Authentication Flow Options
 
-**Recommended: OAuth 2.0 Authorization Code Flow with PKCE (Simplified)**
-- User-friendly browser-based authentication
-- Minimal configuration required - just specify Trino server URL
-- Automatic OAuth provider discovery via Trino's well-known endpoint
-- No client secrets needed (PKCE for security)
-- Handles token refresh automatically
+**Recommended: mcp-remote with OAuth 2.0 Authorization Code Flow**
+- **mcp-remote** handles browser-based authentication
+- Built-in PKCE support for security
+- Automatic token refresh and storage
+- MCP Authorization specification compliance
 - **Requires**: Trino cluster with OAuth already configured
 
-**Alternative: OAuth 2.0 Client Credentials Flow**
-- For service-to-service authentication scenarios
-- Requires manual OAuth provider configuration
-- More complex setup but suitable for headless environments
+**Alternative: Direct OAuth Implementation**
+- More complex - requires custom OAuth middleware
+- Only recommended if mcp-remote cannot be used
 - **Requires**: Trino cluster with OAuth already configured
 
 ## MCP June 2025 Specification Compliance
@@ -61,7 +74,7 @@ http-server.authentication.oauth2.user-mapping.pattern=(.*)
 6. **Bearer Token Authentication**: Use `Authorization: Bearer <token>` header
 7. **HTTPS Enforcement**: All authorization endpoints must use HTTPS
 
-### 1. Enhanced TrinoConfig with OAuth Support (`internal/config/config.go`)
+### 1. Simplified TrinoConfig with Bearer Token Support (`internal/config/config.go`)
 ```go
 // TrinoConfig holds Trino connection parameters
 type TrinoConfig struct {
@@ -78,87 +91,93 @@ type TrinoConfig struct {
     AllowWriteQueries bool          // Controls whether non-read-only SQL queries are allowed
     QueryTimeout      time.Duration // Query execution timeout
     
-    // OAuth 2.1 configuration
-    OAuthEnabled       bool   `env:"TRINO_OAUTH_ENABLED" default:"false"`
-    OAuthLocalPort     int    `env:"TRINO_OAUTH_PORT" default:"8080"` // Local callback port
-    OAuthRefreshBuffer int    `env:"TRINO_OAUTH_REFRESH_BUFFER" default:"300"` // seconds
+    // OAuth mode configuration (simplified with mcp-remote)
+    OAuthEnabled      bool   `env:"TRINO_OAUTH_ENABLED" default:"false"`
     
-    // MCP Resource Indicator (RFC 8707) - canonical URI for this MCP server
-    // Generated from Host:Port when OAuth is enabled
-    OAuthResourceIndicator string // Generated from existing Host/Port/Scheme
-    
-    // Auto-discovered from Trino's .well-known/oauth-authorization-server
-    OAuthClientID      string // Discovered automatically
-    OAuthAuthURL       string // Discovered automatically  
-    OAuthTokenURL      string // Discovered automatically
-    OAuthScopes        string // Discovered automatically
+    // Runtime fields (populated from HTTP headers via mcp-remote)
+    BearerToken       string // JWT token from Authorization header
+    AuthenticatedUser string // User extracted from JWT token
 }
 ```
 
-### 2. MCP-Compliant OAuth Discovery (`internal/oauth/discovery.go`)
-- Fetch OAuth configuration using OpenID Connect Discovery from `{scheme}://{host}:{port}/.well-known/openid-configuration`
-- Parse authorization server metadata (RFC 8414)
-- Validate HTTPS endpoints (MCP requirement)
-- Configure OAuth client automatically
-- Generate Resource Indicator URI from existing Host/Port/Scheme
-- Handle discovery errors gracefully
-- Support Trino's OpenID Connect Discovery by default
+### 2. Bearer Token Validation (`internal/auth/bearer.go`)
+- Extract Bearer token from HTTP Authorization header
+- Validate JWT token format and basic claims
+- Extract user information from JWT token
+- Handle token validation errors gracefully
+- **Note**: Token acquisition and refresh handled by mcp-remote
 
-### 3. MCP-Compliant Browser Authentication (`internal/oauth/browser.go`)
-- Start local HTTPS server for OAuth callback (MCP requirement)
-- Generate PKCE code verifier/challenge (RFC 7636)
-- Include Resource Indicator in authorization request (RFC 8707)
-- Open browser to OAuth authorization URL
-- Handle callback with authorization code
-- Exchange code for access/refresh tokens with Resource Indicator
-- Validate token audience matches Resource Indicator
+### 3. OAuth Discovery for mcp-remote Configuration (`internal/oauth/discovery.go`)
+- Fetch OAuth configuration from Trino's OpenID Connect Discovery endpoint
+- Generate OAuth client metadata for mcp-remote
+- Provide configuration helper for mcp-remote setup
+- **Note**: Only needed for initial mcp-remote configuration
 
-### 4. MCP-Compliant OAuth Client (`internal/oauth/client.go`)
-- Token acquisition and refresh logic with Resource Indicators
-- Automatic token renewal before expiration
-- Thread-safe token management
-- Secure token storage (keyring/encrypted file)
-- Validate token audience matches Resource Indicator
-- Implement OAuth 2.1 security measures
+### 4. HTTP Authentication Middleware (`internal/middleware/auth.go`)
+- Extract Bearer token from Authorization header
+- Validate JWT token and extract user context
+- Pass authenticated user to downstream handlers
+- Return 401 for missing/invalid tokens
+- Return 403 for insufficient permissions
 
-### 5. Authentication-Aware Trino Client Integration (`internal/trino/client.go`)
-- **OAuth Mode**: Use `AccessToken` field in Trino client config
-- **Basic Auth Mode**: Use username/password in DSN
+### 5. Simplified Trino Client Integration (`internal/trino/client.go`)
+- **OAuth Mode**: Use Bearer token from mcp-remote as `AccessToken` in Trino client config
+- **Basic Auth Mode**: Use username/password in DSN (unchanged)
 - Connection method determined by `TrinoConfig.OAuthEnabled`
-- Handle token refresh failures for OAuth mode
+- No token refresh logic needed (handled by mcp-remote)
 - Ensure HTTPS connections for OAuth (MCP requirement)
 
-### 6. MCP Handler Authentication (`internal/handlers/middleware.go`)
-- **OAuth Mode**: Validate incoming Bearer tokens for HTTP transport
-- **Basic Auth Mode**: No additional authentication required
-- Return 401 Unauthorized for missing/invalid tokens (OAuth mode)
-- Return 403 Forbidden for insufficient permissions (OAuth mode)
-- Extract user context from JWT claims (OAuth) or config (Basic)
-- Pass user information to Trino queries via `X-Trino-User` header
-- Validate token audience matches MCP server Resource Indicator (OAuth mode)
-
-### 7. Authentication-Aware HTTP Transport Updates (`cmd/main.go`)
-- **OAuth Mode**: Support Bearer token authentication on all endpoints
-- **Basic Auth Mode**: Use existing authentication approach
+### 6. Simplified HTTP Transport Updates (`cmd/main.go`)
+- **OAuth Mode**: Add authentication middleware to validate Bearer tokens
+- **Basic Auth Mode**: Use existing authentication approach (unchanged)
 - Authentication method determined by configuration
-- Use `Authorization: Bearer <token>` header format (OAuth mode)
 - Return proper HTTP error codes (401, 403, 400)
-- Enforce HTTPS for OAuth authorization endpoints
+- Must run as HTTP server (not STDIO) for mcp-remote compatibility
 
 ## Authentication Configuration Options
 
-### Option 1: OAuth 2.1 Authentication (Recommended)
+### Option 1: OAuth 2.1 with mcp-remote (Recommended)
+
+**Step 1: Deploy MCP Server with OAuth Support**
+```bash
+# Deploy mcp-trino server with OAuth enabled
+export TRINO_HOST=trino.example.com
+export TRINO_PORT=443
+export TRINO_SCHEME=https
+export TRINO_OAUTH_ENABLED=true
+export MCP_TRANSPORT=http
+export MCP_PORT=8080
+
+./mcp-trino
+```
+
+**Step 2: Configure Claude Desktop with mcp-remote**
 ```json
 {
   "mcpServers": {
     "trino": {
-      "command": "mcp-trino",
-      "env": {
-        "TRINO_HOST": "trino.example.com",
-        "TRINO_PORT": "443",
-        "TRINO_SCHEME": "https",
-        "TRINO_OAUTH_ENABLED": "true"
-      }
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://your-mcp-server.com:8080/sse"
+      ]
+    }
+  }
+}
+```
+
+**Step 3: Optional - Custom OAuth Client Metadata**
+```json
+{
+  "mcpServers": {
+    "trino": {
+      "command": "npx",
+      "args": [
+        "mcp-remote",
+        "https://your-mcp-server.com:8080/sse",
+        "--oauth-client-metadata",
+        "{\"client_id\":\"your-client-id\",\"scopes\":[\"openid\",\"profile\",\"email\"]}"
+      ]
     }
   }
 }
@@ -182,54 +201,58 @@ type TrinoConfig struct {
 }
 ```
 
-### OAuth 2.1 Authentication Flow
-1. **First Run**: MCP server detects no stored tokens
-2. **Auto-Discovery**: Fetches OAuth config from `{scheme}://{host}:{port}/.well-known/openid-configuration`
-3. **Resource Indicator**: Generates canonical URI for MCP server (e.g., `https://trino.example.com:443/mcp`)
-4. **Browser Launch**: Opens browser to OAuth authorization URL with PKCE + Resource Indicator
-5. **User Login**: User authenticates with their OAuth provider (Google, Azure AD, etc.)
-6. **Token Exchange**: Exchanges authorization code for tokens with Resource Indicator
-7. **Token Validation**: Validates token audience matches Resource Indicator
-8. **Token Storage**: Securely stores access/refresh tokens locally
-9. **Subsequent Runs**: Uses stored tokens, refreshes automatically with Resource Indicator
+### Simplified OAuth 2.1 Authentication Flow with mcp-remote
+1. **User Starts Claude Desktop**: Claude Desktop launches mcp-remote proxy
+2. **mcp-remote OAuth Discovery**: mcp-remote discovers OAuth configuration from MCP server
+3. **Browser Authentication**: mcp-remote opens browser for OAuth authentication
+4. **User Login**: User authenticates with OAuth provider (Google, Azure AD, etc.)
+5. **Token Storage**: mcp-remote securely stores OAuth tokens in `~/.mcp-auth/`
+6. **Authenticated Requests**: mcp-remote adds `Authorization: Bearer <token>` to all MCP requests
+7. **Token Refresh**: mcp-remote automatically refreshes expired tokens
+8. **MCP Server Validation**: MCP server validates Bearer tokens and extracts user context
+9. **Trino Authentication**: MCP server uses JWT token to authenticate with Trino database
 
-**Note**: This flow creates a separate OAuth client for the MCP server, distinct from Trino's own OAuth configuration.
+**Key Benefits:**
+- **No OAuth complexity in MCP server** - just validate Bearer tokens
+- **Automatic token management** - mcp-remote handles all OAuth flows
+- **MCP Authorization spec compliance** - built into mcp-remote
+- **Remote deployment ready** - can deploy MCP server anywhere
 
 ## Key Implementation Details
 
-### Token Management (OAuth Mode Only)
-- **Storage**: Secure local storage (OS keyring or encrypted file)
-- **Refresh Strategy**: Refresh when token expires within buffer time
+### Simplified Token Management (mcp-remote handles complexity)
+- **Storage**: Handled by mcp-remote in `~/.mcp-auth/`
+- **Refresh Strategy**: Automatic refresh handled by mcp-remote
 - **Error Handling**: Return authentication errors - no fallback
-- **Concurrency**: Thread-safe token access with mutex
+- **Validation**: MCP server only validates Bearer tokens from HTTP headers
 
 ### MCP-Compliant Security Considerations
-- **OAuth 2.1**: Full compliance with OAuth 2.1 security measures
-- **Resource Indicators (RFC 8707)**: MUST implement to prevent token misuse
-- **PKCE**: Required for public clients - uses Proof Key for Code Exchange
-- **Token Validation**: Verify JWT signature, expiration, and audience
-- **Audience Validation**: Ensure token audience matches Resource Indicator
-- **Scope Validation**: Ensure tokens have required Trino access scopes
-- **HTTPS Enforcement**: All authorization endpoints must use HTTPS
-- **Secure Storage**: Use OS keyring or encrypted file for token storage
-- **Error Logging**: Log OAuth failures without exposing sensitive data
-- **Token Passthrough Prevention**: Validate tokens are for this specific MCP server
+- **OAuth 2.1**: Full compliance provided by mcp-remote
+- **Resource Indicators (RFC 8707)**: Implemented by mcp-remote
+- **PKCE**: Built into mcp-remote for security
+- **Token Validation**: MCP server validates JWT format, expiration, and basic claims
+- **HTTPS Enforcement**: Required for both mcp-remote and MCP server
+- **Secure Storage**: mcp-remote handles secure token storage
+- **Error Logging**: Log authentication failures without exposing token data
+- **Bearer Token Validation**: Validate tokens are valid JWT format and not expired
 
 ### Authentication Method Selection
 - **OAuth 2.1**: When `TRINO_OAUTH_ENABLED=true`
 - **Basic Auth**: When `TRINO_OAUTH_ENABLED=false` or not set
 - **Anonymous**: When no credentials provided (uses default "trino" user)
 
-## Benefits of This Approach
+## Benefits of mcp-remote Approach
 
-1. **User-Friendly**: OAuth requires only Trino server URL - no complex configuration
-2. **Automatic Discovery**: Fetches OAuth configuration from Trino's well-known endpoint
-3. **Secure**: Uses PKCE flow - no client secrets needed
-4. **Persistent**: Securely stores tokens for seamless subsequent use
+1. **Dramatically Simplified**: No complex OAuth middleware in MCP server
+2. **User-Friendly**: mcp-remote handles all OAuth complexity automatically
+3. **Secure**: Built-in OAuth 2.1, PKCE, and MCP Authorization spec compliance
+4. **Persistent**: mcp-remote handles secure token storage and refresh
 5. **Trino Compatibility**: Leverages existing JWT support in Trino Go client
-6. **Clear Separation**: OAuth and basic auth are separate modes - no mixing
+6. **Remote Deployment**: Can deploy MCP server anywhere with HTTPS
 7. **Cross-Platform**: Works on macOS, Windows, and Linux
-8. **MCP Compliant**: Meets June 2025 MCP specification requirements
+8. **MCP Compliant**: Full compliance with June 2025 MCP specification
+9. **Separation of Concerns**: OAuth complexity separated from business logic
+10. **Easy Testing**: Can test OAuth and MCP server independently
 
 ## Limitations and Requirements
 
@@ -239,35 +262,39 @@ type TrinoConfig struct {
 - Trino must be configured with HTTPS (required for OAuth 2.0)
 - Trino must expose OAuth metadata via OpenID Connect Discovery
 - Network connectivity to OAuth provider required during authentication
-- Browser access required for initial authentication
+- Browser access required for initial authentication (handled by mcp-remote)
+- MCP server must be deployed with HTTPS (for mcp-remote compatibility)
 
 **Important Notes:**
-- Trino uses Authorization Code flow (not Client Credentials)
-- Trino callback URL: `https://<trino-coordinator>/oauth2/callback`
-- MCP server will create its own OAuth client registration
-- Refresh tokens are supported for longer sessions
+- mcp-remote handles all OAuth flows - no browser integration needed in MCP server
+- MCP server must run as HTTP server (not STDIO) for mcp-remote
+- mcp-remote creates its own OAuth client registration
+- All OAuth complexity is handled by mcp-remote
 
 **Not Suitable For:**
 - Trino clusters without OAuth support
-- Environments where browser access is not available
-- Scenarios requiring custom authentication flows
+- Environments where mcp-remote cannot be installed
+- Scenarios requiring custom authentication flows beyond OAuth 2.1
 
-## MCP-Compliant Implementation Order
+## Simplified Implementation Order with mcp-remote
 
-1. **Enhance TrinoConfig**: Add OAuth fields to existing TrinoConfig structure
-2. **OAuth Discovery**: Implement automatic OAuth provider discovery with RFC 8414 support
-3. **Resource Indicators**: Implement RFC 8707 Resource Indicators for token scoping
-4. **Browser Authentication**: Create PKCE-based browser authentication flow
-5. **Token Storage**: Implement secure token storage and retrieval
-6. **Token Validation**: Add audience validation and OAuth 2.1 security measures
-7. **Trino Integration**: Connect OAuth tokens to Trino client (OAuth mode)
-8. **MCP Handler Authentication**: Add OAuth authentication for HTTP transport
-9. **Error Handling**: Implement proper HTTP error codes (401, 403, 400)
-10. **HTTPS Enforcement**: Ensure OAuth authorization endpoints use HTTPS
-11. **Mode Selection**: Implement authentication method selection logic
-12. **Testing**: Comprehensive testing with both OAuth and basic auth modes
+1. **Enhance TrinoConfig**: Add simple OAuth fields to existing TrinoConfig structure
+2. **Bearer Token Validation**: Implement HTTP Authorization header extraction and JWT validation
+3. **HTTP Authentication Middleware**: Add middleware to validate Bearer tokens
+4. **Trino Integration**: Connect Bearer tokens to Trino client as AccessToken
+5. **HTTP Transport**: Ensure HTTP server mode and proper error handling
+6. **Mode Selection**: Implement authentication method selection logic
+7. **Testing**: Test with mcp-remote for OAuth flows and basic auth separately
 
-This approach provides two distinct authentication modes: OAuth 2.1 for modern security and basic auth for existing deployments, with clear separation between the two.
+**Key Simplifications:**
+- **No OAuth discovery needed** - mcp-remote handles this
+- **No browser integration** - mcp-remote handles OAuth flows
+- **No token storage** - mcp-remote manages tokens
+- **No PKCE implementation** - mcp-remote provides this
+- **No Resource Indicators** - mcp-remote handles MCP Authorization spec
+- **Just Bearer token validation** - much simpler implementation
+
+This approach provides a dramatically simplified OAuth implementation by leveraging mcp-remote for all OAuth complexity while maintaining two distinct authentication modes.
 
 ## Current Authentication Implementation
 
