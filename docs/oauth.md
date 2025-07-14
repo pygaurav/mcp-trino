@@ -36,31 +36,39 @@ http-server.authentication.oauth2.user-mapping.pattern=(.*)
 
 ## Architecture Overview
 
-**mcp-remote Proxy Architecture (Recommended)**
-- **Claude Desktop** connects to local `mcp-remote` proxy
-- **mcp-remote** handles OAuth flow and token management
+**Claude Code Native Remote MCP Support (Recommended)**
+- **Claude Code** connects directly to remote MCP servers with OAuth
+- **Claude Code** handles OAuth flow and token management natively
 - **MCP Server** receives authenticated requests with Bearer tokens
 - **Trino Database** uses JWT tokens for authentication
 
-**Benefits of mcp-remote:**
-- No complex OAuth middleware in MCP server
-- Automatic OAuth 2.1 and MCP Authorization specification compliance
-- Built-in PKCE support and token refresh
-- Simplified MCP server implementation
+**Benefits of Claude Code Native Support:**
+- No proxy needed - direct connection to remote MCP servers
+- Native OAuth 2.1 and MCP Authorization specification compliance
+- Built-in PKCE support and automatic token refresh
+- Simplified setup - just authenticate once
 - Remote deployment ready
+
+**Alternative: mcp-remote Proxy Architecture**
+- For Claude Desktop or environments where Claude Code native support isn't available
+- **Claude Desktop** connects to local `mcp-remote` proxy
+- **mcp-remote** handles OAuth flow and token management
+- Same benefits as Claude Code native support
 
 ## Authentication Flow Options
 
-**Recommended: mcp-remote with OAuth 2.0 Authorization Code Flow**
+**Recommended: Claude Code Native Remote MCP with OAuth 2.0**
+- **Claude Code** handles browser-based authentication natively
+- Built-in PKCE support for security
+- Automatic token refresh and storage
+- Full MCP Authorization specification compliance
+- **Requires**: Trino cluster with OAuth already configured
+
+**Alternative: mcp-remote Proxy with OAuth 2.0**
+- For Claude Desktop or other MCP clients without native remote support
 - **mcp-remote** handles browser-based authentication
 - Built-in PKCE support for security
 - Automatic token refresh and storage
-- MCP Authorization specification compliance
-- **Requires**: Trino cluster with OAuth already configured
-
-**Alternative: Direct OAuth Implementation**
-- More complex - requires custom OAuth middleware
-- Only recommended if mcp-remote cannot be used
 - **Requires**: Trino cluster with OAuth already configured
 
 ## MCP June 2025 Specification Compliance
@@ -136,7 +144,7 @@ type TrinoConfig struct {
 
 ## Authentication Configuration Options
 
-### Option 1: OAuth 2.1 with mcp-remote (Recommended)
+### Option 1: OAuth 2.1 with Claude Code Native Support (Recommended)
 
 **Step 1: Deploy MCP Server with OAuth Support**
 ```bash
@@ -150,6 +158,16 @@ export MCP_PORT=8080
 
 ./mcp-trino
 ```
+
+**Step 2: Configure Claude Code with Remote MCP Server**
+```bash
+# Claude Code will handle OAuth flow automatically
+claude mcp add https://your-mcp-server.com:8080
+```
+
+**Alternative: Option 2: OAuth 2.1 with mcp-remote (For Claude Desktop)**
+
+**Step 1: Deploy MCP Server (same as above)**
 
 **Step 2: Configure Claude Desktop with mcp-remote**
 ```json
@@ -166,24 +184,7 @@ export MCP_PORT=8080
 }
 ```
 
-**Step 3: Optional - Custom OAuth Client Metadata**
-```json
-{
-  "mcpServers": {
-    "trino": {
-      "command": "npx",
-      "args": [
-        "mcp-remote",
-        "https://your-mcp-server.com:8080/sse",
-        "--oauth-client-metadata",
-        "{\"client_id\":\"your-client-id\",\"scopes\":[\"openid\",\"profile\",\"email\"]}"
-      ]
-    }
-  }
-}
-```
-
-### Option 2: Basic Authentication (Current/Legacy)
+### Option 3: Basic Authentication (Current/Legacy - Local Only)
 ```json
 {
   "mcpServers": {
@@ -201,38 +202,40 @@ export MCP_PORT=8080
 }
 ```
 
-### Simplified OAuth 2.1 Authentication Flow with mcp-remote
-1. **User Starts Claude Desktop**: Claude Desktop launches mcp-remote proxy
-2. **mcp-remote OAuth Discovery**: mcp-remote discovers OAuth configuration from MCP server
-3. **Browser Authentication**: mcp-remote opens browser for OAuth authentication
+### Simplified OAuth 2.1 Authentication Flow with Claude Code Native Support
+1. **User Adds Remote MCP Server**: `claude mcp add https://your-server.com:8080`
+2. **Claude Code OAuth Discovery**: Claude Code discovers OAuth configuration from MCP server
+3. **Browser Authentication**: Claude Code opens browser for OAuth authentication
 4. **User Login**: User authenticates with OAuth provider (Google, Azure AD, etc.)
-5. **Token Storage**: mcp-remote securely stores OAuth tokens in `~/.mcp-auth/`
-6. **Authenticated Requests**: mcp-remote adds `Authorization: Bearer <token>` to all MCP requests
-7. **Token Refresh**: mcp-remote automatically refreshes expired tokens
+5. **Token Storage**: Claude Code securely stores OAuth tokens locally
+6. **Authenticated Requests**: Claude Code adds `Authorization: Bearer <token>` to all MCP requests
+7. **Token Refresh**: Claude Code automatically refreshes expired tokens
 8. **MCP Server Validation**: MCP server validates Bearer tokens and extracts user context
 9. **Trino Authentication**: MCP server uses JWT token to authenticate with Trino database
 
 **Key Benefits:**
 - **No OAuth complexity in MCP server** - just validate Bearer tokens
-- **Automatic token management** - mcp-remote handles all OAuth flows
-- **MCP Authorization spec compliance** - built into mcp-remote
+- **Native integration** - no proxy needed with Claude Code
+- **Automatic token management** - Claude Code handles all OAuth flows
+- **MCP Authorization spec compliance** - built into Claude Code
 - **Remote deployment ready** - can deploy MCP server anywhere
+- **Authenticate once** - seamless experience across sessions
 
 ## Key Implementation Details
 
-### Simplified Token Management (mcp-remote handles complexity)
-- **Storage**: Handled by mcp-remote in `~/.mcp-auth/`
-- **Refresh Strategy**: Automatic refresh handled by mcp-remote
+### Simplified Token Management (Claude Code handles complexity)
+- **Storage**: Handled by Claude Code locally (secure keychain/credential storage)
+- **Refresh Strategy**: Automatic refresh handled by Claude Code
 - **Error Handling**: Return authentication errors - no fallback
 - **Validation**: MCP server only validates Bearer tokens from HTTP headers
 
 ### MCP-Compliant Security Considerations
-- **OAuth 2.1**: Full compliance provided by mcp-remote
-- **Resource Indicators (RFC 8707)**: Implemented by mcp-remote
-- **PKCE**: Built into mcp-remote for security
+- **OAuth 2.1**: Full compliance provided by Claude Code
+- **Resource Indicators (RFC 8707)**: Implemented by Claude Code
+- **PKCE**: Built into Claude Code for security
 - **Token Validation**: MCP server validates JWT format, expiration, and basic claims
-- **HTTPS Enforcement**: Required for both mcp-remote and MCP server
-- **Secure Storage**: mcp-remote handles secure token storage
+- **HTTPS Enforcement**: Required for both Claude Code and MCP server
+- **Secure Storage**: Claude Code handles secure token storage
 - **Error Logging**: Log authentication failures without exposing token data
 - **Bearer Token Validation**: Validate tokens are valid JWT format and not expired
 
@@ -241,18 +244,20 @@ export MCP_PORT=8080
 - **Basic Auth**: When `TRINO_OAUTH_ENABLED=false` or not set
 - **Anonymous**: When no credentials provided (uses default "trino" user)
 
-## Benefits of mcp-remote Approach
+## Benefits of Claude Code Native OAuth Approach
 
 1. **Dramatically Simplified**: No complex OAuth middleware in MCP server
-2. **User-Friendly**: mcp-remote handles all OAuth complexity automatically
-3. **Secure**: Built-in OAuth 2.1, PKCE, and MCP Authorization spec compliance
-4. **Persistent**: mcp-remote handles secure token storage and refresh
-5. **Trino Compatibility**: Leverages existing JWT support in Trino Go client
-6. **Remote Deployment**: Can deploy MCP server anywhere with HTTPS
-7. **Cross-Platform**: Works on macOS, Windows, and Linux
-8. **MCP Compliant**: Full compliance with June 2025 MCP specification
-9. **Separation of Concerns**: OAuth complexity separated from business logic
-10. **Easy Testing**: Can test OAuth and MCP server independently
+2. **User-Friendly**: Claude Code handles all OAuth complexity automatically
+3. **Native Integration**: No proxy needed - direct connection to remote MCP servers
+4. **Secure**: Built-in OAuth 2.1, PKCE, and MCP Authorization spec compliance
+5. **Persistent**: Claude Code handles secure token storage and refresh
+6. **Trino Compatibility**: Leverages existing JWT support in Trino Go client
+7. **Remote Deployment**: Can deploy MCP server anywhere with HTTPS
+8. **Cross-Platform**: Works on macOS, Windows, and Linux
+9. **MCP Compliant**: Full compliance with June 2025 MCP specification
+10. **Separation of Concerns**: OAuth complexity separated from business logic
+11. **Easy Testing**: Can test OAuth and MCP server independently
+12. **Authenticate Once**: Seamless experience across Claude Code sessions
 
 ## Limitations and Requirements
 
