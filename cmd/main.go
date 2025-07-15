@@ -125,8 +125,8 @@ func main() {
 		// Add status endpoint
 		mux.HandleFunc("/", handleStatus)
 		
-		// Add MCP endpoint with StreamableHTTP
-		mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		// Shared MCP handler function for both endpoints
+		mcpHandler := func(w http.ResponseWriter, r *http.Request) {
 			// Add CORS headers
 			w.Header().Set("Access-Control-Allow-Origin", "*")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
@@ -141,7 +141,13 @@ func main() {
 			
 			// Handle MCP request using StreamableHTTP server
 			streamableServer.ServeHTTP(w, r)
-		})
+		}
+		
+		// Add MCP endpoint (modern)
+		mux.HandleFunc("/mcp", mcpHandler)
+		
+		// Add SSE endpoint (backward compatibility)
+		mux.HandleFunc("/sse", mcpHandler)
 
 		httpServer := &http.Server{
 			Addr:    addr,
@@ -149,24 +155,39 @@ func main() {
 		}
 
 		go func() {
-			if trinoConfig.OAuthEnabled {
-				certFile := getEnv("HTTPS_CERT_FILE", "")
-				keyFile := getEnv("HTTPS_KEY_FILE", "")
-				
-				if certFile != "" && keyFile != "" {
-					log.Printf("Starting HTTPS server on %s/mcp (OAuth enabled)", addr)
-					if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
-						log.Fatalf("HTTPS server error: %v", err)
-					}
+			// Check for HTTPS certificates (independent of OAuth)
+			certFile := getEnv("HTTPS_CERT_FILE", "")
+			keyFile := getEnv("HTTPS_KEY_FILE", "")
+			
+			if certFile != "" && keyFile != "" {
+				// Start HTTPS server
+				oauthStatus := ""
+				if trinoConfig.OAuthEnabled {
+					oauthStatus = " (OAuth enabled)"
 				} else {
-					log.Printf("WARNING: OAuth is enabled but HTTPS certificates not provided. Running HTTP server (not recommended for production)")
-					log.Printf("Starting HTTP server on %s/mcp", addr)
-					if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-						log.Fatalf("HTTP server error: %v", err)
-					}
+					oauthStatus = " (OAuth disabled)"
+				}
+				
+				log.Printf("Starting HTTPS server on %s%s", addr, oauthStatus)
+				log.Printf("  - Modern endpoint: https://localhost%s/mcp", addr)
+				log.Printf("  - Legacy endpoint: https://localhost%s/sse (backward compatibility)", addr)
+				
+				if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+					log.Fatalf("HTTPS server error: %v", err)
 				}
 			} else {
-				log.Printf("Starting HTTP server on %s/mcp", addr)
+				// Start HTTP server
+				oauthStatus := ""
+				if trinoConfig.OAuthEnabled {
+					oauthStatus = " (OAuth enabled - WARNING: HTTPS recommended for production)"
+				} else {
+					oauthStatus = " (OAuth disabled)"
+				}
+				
+				log.Printf("Starting HTTP server on %s%s", addr, oauthStatus)
+				log.Printf("  - Modern endpoint: http://localhost%s/mcp", addr)
+				log.Printf("  - Legacy endpoint: http://localhost%s/sse (backward compatibility)", addr)
+				
 				if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 					log.Fatalf("HTTP server error: %v", err)
 				}

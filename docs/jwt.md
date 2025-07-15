@@ -248,8 +248,9 @@ curl -X POST https://localhost:8080/mcp \
 
 ### Claude Code Configuration
 
-Update your `~/.claude/mcp.json`:
+The server supports both modern and legacy endpoints for backward compatibility:
 
+**Modern endpoint (recommended):**
 ```json
 {
   "mcpServers": {
@@ -263,6 +264,64 @@ Update your `~/.claude/mcp.json`:
   }
 }
 ```
+
+**Legacy endpoint (backward compatibility):**
+```json
+{
+  "mcpServers": {
+    "trino-oauth": {
+      "type": "http", 
+      "url": "https://localhost:8080/sse",
+      "headers": {
+        "Authorization": "Bearer <your-jwt-token>"
+      }
+    }
+  }
+}
+```
+
+Both endpoints provide identical functionality and security.
+
+## Backward Compatibility
+
+### Endpoint Support
+
+The server maintains backward compatibility by supporting both endpoints:
+
+| Endpoint | Status | Description |
+|----------|---------|-------------|
+| `/mcp` | ✅ **Recommended** | Modern StreamableHTTP endpoint |
+| `/sse` | ✅ **Legacy Support** | Backward compatibility for existing clients |
+
+### Migration Path
+
+For existing clients using the `/sse` endpoint:
+
+1. **No immediate changes required** - `/sse` endpoint continues to work
+2. **Gradual migration** - Update clients to use `/mcp` when convenient  
+3. **Same authentication** - Both endpoints use identical OAuth implementation
+4. **Same functionality** - All MCP methods available on both endpoints
+
+### Technical Implementation
+
+Both endpoints are handled by the same `mcpHandler` function:
+
+```go
+// Shared MCP handler function for both endpoints
+mcpHandler := func(w http.ResponseWriter, r *http.Request) {
+    // Same CORS, authentication, and processing logic
+    streamableServer.ServeHTTP(w, r)
+}
+
+// Add both endpoints
+mux.HandleFunc("/mcp", mcpHandler)  // Modern
+mux.HandleFunc("/sse", mcpHandler)  // Legacy
+```
+
+This ensures:
+- **Identical behavior** across both endpoints
+- **Single codebase** for maintenance
+- **Consistent security** implementation
 
 ### Production Considerations
 
