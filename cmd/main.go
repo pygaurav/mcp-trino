@@ -59,7 +59,7 @@ func main() {
 			log.Fatalf("STDIO server error: %v", err)
 		}
 	case "http":
-		port := getEnv("MCP_PORT", "9097")
+		port := getEnv("MCP_PORT", "8080")
 		httpServer := server.NewHTTPServer(mcpServer, trinoConfig, Version)
 		if err := httpServer.Start(port); err != nil {
 			log.Fatalf("HTTP server error: %v", err)

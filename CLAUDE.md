@@ -8,10 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Tech Stack
 
-- **Language:** Go 1.24+
+- **Language:** Go 1.24.2+
 - **Key Dependencies:** 
-  - `github.com/mark3labs/mcp-go` v0.25.0 (MCP protocol)
+  - `github.com/mark3labs/mcp-go` v0.33.0 (MCP protocol)
   - `github.com/trinodb/trino-go-client` v0.323.0 (Trino client)
+  - `github.com/golang-jwt/jwt/v5` v5.2.2 (JWT authentication)
 - **Build Tools:** GoReleaser, Docker, GitHub Actions, golangci-lint
 
 ## Development Commands
@@ -73,9 +74,7 @@ go test ./internal/handlers  # Test MCP handlers package
 ### Transport Support
 
 - **STDIO Transport**: Direct MCP client integration (default)
-- **HTTP Transport**: REST API with SSE support on `/sse` endpoint
-- **Message Endpoint**: POST `/api/v1` for HTTP-based MCP communication
-- **Query Endpoint**: POST `/api/query` for direct SQL queries
+- **HTTP Transport**: StreamableHTTP support on `/mcp` endpoint with SSE backward compatibility on `/sse` endpoint
 - **Status Endpoint**: GET `/` returns server status and version
 
 ### SQL Security Architecture
@@ -101,7 +100,7 @@ Environment variables for connection and security:
 - `TRINO_SCHEME` (http/https), `TRINO_SSL`, `TRINO_SSL_INSECURE`
 - `TRINO_ALLOW_WRITE_QUERIES` (default: false for security)
 - `TRINO_QUERY_TIMEOUT` (default: 30 seconds, validated > 0)
-- `MCP_TRANSPORT` (stdio/http), `MCP_PORT` (default: 9097), `MCP_HOST`
+- `MCP_TRANSPORT` (stdio/http), `MCP_PORT` (default: 8080), `MCP_HOST`
 
 Key defaults and behaviors:
 - HTTPS scheme forces SSL=true regardless of TRINO_SSL setting
@@ -136,10 +135,10 @@ The GitHub Actions workflow (`.github/workflows/build.yml`) includes:
 
 ## Manual Testing
 
-- Use `examples/test_query.go` for HTTP API testing
 - Docker Compose setup includes real Trino server  
-- Set `MCP_TRANSPORT=http` and test SSE endpoint at `http://localhost:9097/sse`
-- Test direct query endpoint at `POST /api/query`
+- Set `MCP_TRANSPORT=http` and test StreamableHTTP endpoint at `http://localhost:8080/mcp`
+- Test legacy SSE endpoint at `http://localhost:8080/sse` for backward compatibility
+- Test status endpoint at `GET /`
 
 ## Build and Release
 
