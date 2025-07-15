@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	mcpserver "github.com/mark3labs/mcp-go/server"
 	"github.com/tuannvm/mcp-trino/internal/auth"
@@ -100,7 +102,18 @@ func (s *HTTPServer) Start(port string) error {
 
 	<-done
 	log.Println("Shutting down HTTP server...")
-	return httpServer.Close()
+	
+	// Allow 30 seconds for graceful shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	
+	log.Println("Waiting for active connections to finish (max 30 seconds)...")
+	if err := httpServer.Shutdown(ctx); err != nil {
+		log.Printf("HTTP server forced shutdown after timeout: %v", err)
+		return httpServer.Close()
+	}
+	log.Println("HTTP server shutdown completed gracefully")
+	return nil
 }
 
 // createMCPHandler creates the shared MCP handler function
