@@ -7,6 +7,7 @@ import (
 	"log"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -191,4 +192,25 @@ func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallTool
 	}
 
 	return mcp.NewToolResultText(string(jsonData)), nil
+}
+
+// RegisterTrinoTools registers all Trino-related tools with the MCP server
+func RegisterTrinoTools(m *server.MCPServer, h *TrinoHandlers) {
+	m.AddTool(mcp.NewTool("execute_query",
+		mcp.WithDescription("Execute a SQL query"),
+		mcp.WithString("query", mcp.Required(), mcp.Description("SQL query")),
+	), h.ExecuteQuery)
+	m.AddTool(mcp.NewTool("list_catalogs", mcp.WithDescription("List catalogs")), h.ListCatalogs)
+	m.AddTool(mcp.NewTool("list_schemas",
+		mcp.WithDescription("List schemas"),
+		mcp.WithString("catalog", mcp.Description("Catalog"))), h.ListSchemas)
+	m.AddTool(mcp.NewTool("list_tables",
+		mcp.WithDescription("List tables"),
+		mcp.WithString("catalog", mcp.Description("Catalog")),
+		mcp.WithString("schema", mcp.Description("Schema"))), h.ListTables)
+	m.AddTool(mcp.NewTool("get_table_schema",
+		mcp.WithDescription("Get table schema"),
+		mcp.WithString("catalog", mcp.Description("Catalog")),
+		mcp.WithString("schema", mcp.Description("Schema")),
+		mcp.WithString("table", mcp.Required(), mcp.Description("Table"))), h.GetTableSchema)
 }

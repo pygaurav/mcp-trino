@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -120,6 +121,28 @@ func getStringClaim(claims jwt.MapClaims, key string) string {
 func GetUserFromContext(ctx context.Context) (*User, bool) {
 	user, ok := ctx.Value(userContextKey).(*User)
 	return user, ok
+}
+
+// CreateHTTPContextFunc creates the HTTP context function for token extraction
+func CreateHTTPContextFunc() func(context.Context, *http.Request) context.Context {
+	return func(ctx context.Context, r *http.Request) context.Context {
+		// Extract Bearer token from Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			token := strings.TrimPrefix(authHeader, "Bearer ")
+			// Clean any whitespace
+			token = strings.TrimSpace(token)
+			ctx = WithOAuthToken(ctx, token)
+			log.Printf("OAuth: Token extracted from request (length: %d)", len(token))
+		} else if authHeader != "" {
+			preview := authHeader
+			if len(authHeader) > 30 {
+				preview = authHeader[:30] + "..."
+			}
+			log.Printf("OAuth: Invalid Authorization header format: %s", preview)
+		}
+		return ctx
+	}
 }
 
 // CreateRequestAuthHook creates a server-level authentication hook for all MCP requests
