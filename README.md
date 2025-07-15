@@ -26,7 +26,8 @@ Trino (formerly PrestoSQL) is a powerful distributed SQL query engine designed f
 - ✅ Catalog, schema, and table discovery
 - ✅ Docker container support
 - ✅ Supports both STDIO and HTTP transports
-- ✅ Server-Sent Events (SSE) support for Cursor and other MCP clients
+- ⚠️ StreamableHTTP support with JWT authentication (upgraded from SSE) - **Basic implementation**
+- ✅ Backward compatibility with SSE endpoints
 - ✅ Compatible with Cursor, Claude Desktop, Windsurf, ChatWise, and any MCP-compatible clients.
 
 ## Installation
@@ -173,13 +174,40 @@ To use with [Cursor](https://cursor.sh/), create or edit `~/.cursor/mcp.json`:
 
 Replace the environment variables with your specific Trino configuration.
 
-For HTTP+SSE transport mode (supported for Cursor integration):
+For HTTP+StreamableHTTP transport mode (recommended for web clients):
 
 ```json
 {
   "mcpServers": {
     "mcp-trino-http": {
-      "url": "http://localhost:9097/sse"
+      "url": "http://localhost:8080/mcp"
+    }
+  }
+}
+```
+
+For remote MCP server with JWT authentication:
+
+```json
+{
+  "mcpServers": {
+    "mcp-trino-remote": {
+      "url": "https://your-mcp-server.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_JWT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+For backward compatibility with SSE (legacy endpoint):
+
+```json
+{
+  "mcpServers": {
+    "mcp-trino-sse": {
+      "url": "http://localhost:8080/sse"
     }
   }
 }
@@ -188,7 +216,14 @@ For HTTP+SSE transport mode (supported for Cursor integration):
 Then start the server in a separate terminal with:
 
 ```bash
+# Basic HTTP transport
 MCP_TRANSPORT=http TRINO_HOST=<HOST> TRINO_PORT=<PORT> TRINO_USER=<USERNAME> TRINO_PASSWORD=<PASSWORD> mcp-trino
+
+# With JWT authentication enabled
+MCP_TRANSPORT=http TRINO_OAUTH_ENABLED=true TRINO_HOST=<HOST> TRINO_PORT=<PORT> TRINO_USER=<USERNAME> TRINO_PASSWORD=<PASSWORD> mcp-trino
+
+# Production deployment with HTTPS
+MCP_TRANSPORT=http TRINO_OAUTH_ENABLED=true HTTPS_CERT_FILE=/path/to/cert.pem HTTPS_KEY_FILE=/path/to/key.pem TRINO_HOST=<HOST> TRINO_PORT=<PORT> TRINO_USER=<USERNAME> TRINO_PASSWORD=<PASSWORD> mcp-trino
 ```
 
 ### Claude Desktop
@@ -264,6 +299,7 @@ Restart Windsurf to apply the changes. The Trino MCP tools will be available to 
 
 To use with [ChatWise](https://chatwise.app?atp=uo1wzc), follow these steps:
 
+**Local MCP Server:**
 1. Open ChatWise and go to Settings
 2. Navigate to the Tools section
 3. Click the "+" icon to add a new tool
@@ -280,7 +316,27 @@ To use with [ChatWise](https://chatwise.app?atp=uo1wzc), follow these steps:
      TRINO_PASSWORD=<PASSWORD>
      ```
 
-Alternatively, you can import the configuration from JSON:
+**Remote MCP Server:**
+For remote MCP servers with JWT authentication:
+
+1. Copy this JSON to your clipboard:
+   ```json
+   {
+     "mcpServers": {
+       "remote-trino": {
+         "url": "https://your-mcp-server.com/mcp",
+         "headers": {
+           "Authorization": "Bearer YOUR_JWT_TOKEN"
+         }
+       }
+     }
+   }
+   ```
+2. In ChatWise Settings > Tools, click the "+" icon
+3. Select "Import JSON from Clipboard"
+4. Toggle the switch next to the tool to enable it
+
+Alternatively, you can import the local configuration from JSON:
 
 1. Copy this JSON to your clipboard:
    ```json
@@ -514,6 +570,361 @@ Here's a complete interaction example showing how an AI assistant might use thes
 
 This seamless workflow demonstrates how the MCP tools enable AI assistants to explore and query data in a conversational manner.
 
+## Authentication and Transport
+
+### Transport Methods
+
+The server supports two transport methods:
+
+#### STDIO Transport (Default)
+- Direct integration with MCP clients
+- Ideal for desktop applications like Claude Desktop
+- Uses standard input/output for communication
+
+#### HTTP Transport with StreamableHTTP
+- **Modern approach**: Uses the `/mcp` endpoint with StreamableHTTP protocol
+- **Legacy support**: Maintains `/sse` endpoint for backward compatibility with SSE
+- Supports web-based MCP clients
+- Enables JWT authentication for secure access
+
+### JWT Authentication (OAuth 2.1) - Basic Implementation
+
+⚠️ **Security Notice**: This is a basic JWT implementation suitable for development and testing. For production use, consider implementing proper OAuth 2.1/OpenID Connect integration with established providers.
+
+When `TRINO_OAUTH_ENABLED=true`, the server requires JWT tokens for authentication:
+
+```bash
+# Enable OAuth authentication
+export TRINO_OAUTH_ENABLED=true
+
+# Set JWT secret for token validation (REQUIRED - no fallback)
+export JWT_SECRET=your-secret-key-here
+
+# Start server with HTTP transport
+export MCP_TRANSPORT=http
+mcp-trino
+```
+
+**Security Improvements:**
+- **JWT Secret Caching**: Uses `sync.Once` pattern for efficient secret caching
+- **No Default Fallback**: JWT_SECRET is required - no insecure default values
+- **Proper JWT Validation**: Implements signature verification with proper error handling
+- **Graceful Shutdown**: HTTP server implements graceful shutdown with timeout
+
+Client requests must include the JWT token in the Authorization header:
+```http
+Authorization: Bearer <your-jwt-token>
+```
+
+The server validates JWT tokens and extracts user information from claims:
+- `sub` (subject): Required user identifier
+- `preferred_username`: Username for logging
+- `email`: User email address
+
+#### Creating JWT Tokens
+
+For testing and development, you can create JWT tokens using various methods:
+
+**Method 1: Using jwt.io (Development/Testing)**
+1. Go to [jwt.io](https://jwt.io/)
+2. In the payload section, add the required claims:
+   ```json
+   {
+     "sub": "user123",
+     "preferred_username": "john.doe",
+     "email": "john.doe@example.com",
+     "iat": 1516239022,
+     "exp": 1735689600
+   }
+   ```
+3. Use the generated token (Note: This is for testing only, not production)
+
+**Method 2: Using Node.js/JavaScript**
+```javascript
+const jwt = require('jsonwebtoken');
+
+const payload = {
+  sub: 'user123',
+  preferred_username: 'john.doe',
+  email: 'john.doe@example.com',
+  iat: Math.floor(Date.now() / 1000),
+  exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) // 24 hours
+};
+
+// Use the same secret as JWT_SECRET environment variable (required)
+const secret = process.env.JWT_SECRET;
+if (!secret) {
+  throw new Error('JWT_SECRET environment variable is required');
+}
+const token = jwt.sign(payload, secret);
+console.log(token);
+```
+
+**Method 3: Using Python**
+```python
+import jwt
+import datetime
+import os
+
+payload = {
+    'sub': 'user123',
+    'preferred_username': 'john.doe',
+    'email': 'john.doe@example.com',
+    'iat': datetime.datetime.utcnow(),
+    'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
+}
+
+# Use the same secret as JWT_SECRET environment variable (required)
+secret = os.getenv('JWT_SECRET')
+if not secret:
+    raise ValueError('JWT_SECRET environment variable is required')
+token = jwt.encode(payload, secret, algorithm='HS256')
+print(token)
+```
+
+**Method 4: Using Go**
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+    "os"
+    "time"
+    "github.com/golang-jwt/jwt/v5"
+)
+
+func main() {
+    // Use the same secret as JWT_SECRET environment variable (required)
+    secret := os.Getenv("JWT_SECRET")
+    if secret == "" {
+        log.Fatal("JWT_SECRET environment variable is required")
+    }
+    
+    token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+        "sub": "user123",
+        "preferred_username": "john.doe",
+        "email": "john.doe@example.com",
+        "iat": time.Now().Unix(),
+        "exp": time.Now().Add(time.Hour * 24).Unix(),
+    })
+
+    tokenString, err := token.SignedString([]byte(secret))
+    if err != nil {
+        log.Fatal("Failed to sign token:", err)
+    }
+    fmt.Println(tokenString)
+}
+```
+
+**Method 5: Using OpenSSL Command Line**
+```bash
+# Create a simple JWT payload
+echo '{"sub":"user123","preferred_username":"john.doe","email":"john.doe@example.com","iat":1516239022,"exp":1735689600}' | base64 -w 0
+
+# Note: This creates only the payload part. For a complete token, use one of the above methods.
+```
+
+**For Production Use:**
+- Use proper OAuth 2.1/OpenID Connect providers (Auth0, Keycloak, etc.)
+- Implement proper key rotation and management
+- Use RS256 or ES256 algorithms with proper key pairs
+- Validate tokens with proper issuer verification
+- Set strong JWT_SECRET (minimum 256 bits) - **REQUIRED, no fallback**
+- Consider implementing token refresh mechanisms
+- **Security Enhancements Applied:**
+  - JWT secret caching with `sync.Once` pattern for performance
+  - Proper JWT signature verification (no ParseUnverified)
+  - Consolidated authentication logic to eliminate duplication
+  - Graceful HTTP server shutdown with timeout
+  - No insecure default secrets
+
+**Testing Your Token:**
+```bash
+# Test with curl
+curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"method":"tools/list","params":{}}' \
+     https://your-mcp-server.com/mcp
+```
+
+### HTTPS Support
+
+For production deployments with authentication, HTTPS is strongly recommended:
+
+```bash
+export HTTPS_CERT_FILE=/path/to/certificate.pem
+export HTTPS_KEY_FILE=/path/to/private-key.pem
+export TRINO_OAUTH_ENABLED=true
+export MCP_TRANSPORT=http
+mcp-trino
+```
+
+The server will automatically start with HTTPS when certificate files are provided.
+
+## Remote MCP Server Deployment
+
+Since the server supports JWT authentication and HTTP transport, you can deploy it as a remote MCP server accessible to multiple clients over the network.
+
+### Production Deployment Example
+
+```bash
+# Deploy with HTTPS and JWT authentication
+export MCP_TRANSPORT=http
+export MCP_PORT=443
+export TRINO_OAUTH_ENABLED=true
+export HTTPS_CERT_FILE=/etc/ssl/certs/mcp-trino.pem
+export HTTPS_KEY_FILE=/etc/ssl/private/mcp-trino.key
+export TRINO_HOST=your-trino-cluster.com
+export TRINO_PORT=443
+export TRINO_USER=service-account
+export TRINO_PASSWORD=service-password
+
+# Start the server
+mcp-trino
+```
+
+### Client Configuration for Remote Server
+
+**With JWT Authentication:**
+```json
+{
+  "mcpServers": {
+    "remote-trino": {
+      "url": "https://your-mcp-server.com/mcp",
+      "headers": {
+        "Authorization": "Bearer YOUR_JWT_TOKEN"
+      }
+    }
+  }
+}
+```
+
+**Load Balancer/Proxy Configuration:**
+```nginx
+server {
+    listen 443 ssl;
+    server_name your-mcp-server.com;
+    
+    ssl_certificate /etc/ssl/certs/mcp-trino.pem;
+    ssl_certificate_key /etc/ssl/private/mcp-trino.key;
+    
+    location /mcp {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Authorization $http_authorization;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+    }
+}
+```
+
+### Docker Deployment
+
+For containerized deployment:
+
+```dockerfile
+FROM ghcr.io/tuannvm/mcp-trino:latest
+
+ENV MCP_TRANSPORT=http
+ENV MCP_PORT=8080
+ENV TRINO_OAUTH_ENABLED=true
+ENV TRINO_HOST=your-trino-cluster.com
+ENV TRINO_PORT=443
+ENV TRINO_USER=service-account
+ENV TRINO_PASSWORD=service-password
+
+EXPOSE 8080
+
+CMD ["mcp-trino"]
+```
+
+```bash
+# Build and run with Docker
+docker build -t mcp-trino-server .
+docker run -d -p 8080:8080 \
+  -e HTTPS_CERT_FILE=/certs/cert.pem \
+  -e HTTPS_KEY_FILE=/certs/key.pem \
+  -v /path/to/certs:/certs \
+  mcp-trino-server
+```
+
+### Security Considerations
+
+- **JWT Token Management**: Implement proper token rotation and validation
+- **Network Security**: Use HTTPS in production and consider network-level security
+- **Access Control**: Implement proper authentication and authorization mechanisms
+- **Monitoring**: Set up logging and monitoring for security events
+- **Token Security**: 
+  - Never commit JWT secrets to version control
+  - Use strong, randomly generated secrets (minimum 256 bits)
+  - Implement short token expiration times with refresh mechanisms
+  - Store tokens securely in client applications
+- **Production Recommendations**:
+  - Use asymmetric algorithms (RS256, ES256) instead of HS256
+  - Implement proper issuer (`iss`) and audience (`aud`) validation
+  - Use established OAuth 2.1/OpenID Connect providers
+  - Implement token revocation mechanisms
+
+### Quick Start Example
+
+Here's a complete example to get started with JWT authentication:
+
+1. **Generate a test JWT token** (using Node.js):
+   ```bash
+   npm install jsonwebtoken
+   export JWT_SECRET="test-secret-key-minimum-256-bits"
+   node -e "
+   const jwt = require('jsonwebtoken');
+   const secret = process.env.JWT_SECRET;
+   if (!secret) {
+     throw new Error('JWT_SECRET environment variable is required');
+   }
+   const token = jwt.sign({
+     sub: 'test-user',
+     preferred_username: 'testuser',
+     email: 'test@example.com',
+     exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
+   }, secret);
+   console.log('JWT Token:', token);
+   "
+   ```
+
+2. **Start the MCP server with authentication**:
+   ```bash
+   MCP_TRANSPORT=http \
+   TRINO_OAUTH_ENABLED=true \
+   JWT_SECRET="test-secret-key-minimum-256-bits" \
+   TRINO_HOST=localhost \
+   TRINO_PORT=8080 \
+   TRINO_USER=trino \
+   mcp-trino
+   ```
+
+3. **Test with curl**:
+   ```bash
+   curl -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{"method":"tools/list","params":{}}' \
+        http://localhost:8080/mcp
+   ```
+
+4. **Configure your MCP client** (e.g., Cursor):
+   ```json
+   {
+     "mcpServers": {
+       "trino-with-auth": {
+         "url": "http://localhost:8080/mcp",
+         "headers": {
+           "Authorization": "Bearer YOUR_JWT_TOKEN"
+         }
+       }
+     }
+   }
+   ```
+
 ## Configuration
 
 The server can be configured using the following environment variables:
@@ -532,8 +943,12 @@ The server can be configured using the following environment variables:
 | TRINO_ALLOW_WRITE_QUERIES | Allow non-read-only SQL queries | false     |
 | TRINO_QUERY_TIMEOUT    | Query timeout in seconds          | 30        |
 | MCP_TRANSPORT          | Transport method (stdio/http)     | stdio     |
-| MCP_PORT               | HTTP port for http transport      | 9097      |
+| MCP_PORT               | HTTP port for http transport      | 8080      |
 | MCP_HOST               | Host for HTTP callbacks           | localhost |
+| TRINO_OAUTH_ENABLED    | Enable OAuth/JWT authentication   | false     |
+| JWT_SECRET             | JWT signing secret (REQUIRED for production) | (empty) |
+| HTTPS_CERT_FILE        | Path to HTTPS certificate file    | (empty)   |
+| HTTPS_KEY_FILE         | Path to HTTPS private key file    | (empty)   |
 
 > **Note**: When `TRINO_SCHEME` is set to "https", `TRINO_SSL` is automatically set to true regardless of the provided value.
 
@@ -541,7 +956,11 @@ The server can be configured using the following environment variables:
 
 > **Security Note**: By default, only read-only queries (SELECT, SHOW, DESCRIBE, EXPLAIN) are allowed to prevent SQL injection. If you need to execute write operations or other non-read queries, set `TRINO_ALLOW_WRITE_QUERIES=true`, but be aware this bypasses this security protection.
 
-> **For Cursor Integration**: When using with Cursor, set `MCP_TRANSPORT=http` and connect to the `/sse` endpoint. The server will automatically handle SSE (Server-Sent Events) connections.
+> **For Web Client Integration**: When using with web clients, set `MCP_TRANSPORT=http` and connect to the `/mcp` endpoint for StreamableHTTP support. The `/sse` endpoint is maintained for backward compatibility.
+
+> **JWT Authentication**: When `TRINO_OAUTH_ENABLED=true`, the server requires JWT tokens in the Authorization header (`Bearer <token>`). This is particularly useful for web-based MCP clients that need authentication.
+
+> **HTTPS Support**: For production deployments, configure HTTPS by setting `HTTPS_CERT_FILE` and `HTTPS_KEY_FILE` environment variables. This is strongly recommended when using JWT authentication.
 
 ## Contributing
 

@@ -10,6 +10,7 @@ import (
 
 // TrinoConfig holds Trino connection parameters
 type TrinoConfig struct {
+	// Basic connection parameters
 	Host              string
 	Port              int
 	User              string
@@ -21,6 +22,10 @@ type TrinoConfig struct {
 	SSLInsecure       bool
 	AllowWriteQueries bool          // Controls whether non-read-only SQL queries are allowed
 	QueryTimeout      time.Duration // Query execution timeout
+	
+	// OAuth mode configuration
+	OAuthEnabled      bool   // Enable OAuth 2.1 authentication
+	JWTSecret         string // JWT signing secret for token validation
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
@@ -30,6 +35,8 @@ func NewTrinoConfig() *TrinoConfig {
 	sslInsecure, _ := strconv.ParseBool(getEnv("TRINO_SSL_INSECURE", "true"))
 	scheme := getEnv("TRINO_SCHEME", "https")
 	allowWriteQueries, _ := strconv.ParseBool(getEnv("TRINO_ALLOW_WRITE_QUERIES", "false"))
+	oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
+	jwtSecret := getEnv("JWT_SECRET", "")
 
 	// Parse query timeout from environment variable
 	const defaultTimeout = 30
@@ -58,6 +65,14 @@ func NewTrinoConfig() *TrinoConfig {
 		log.Println("WARNING: Write queries are enabled (TRINO_ALLOW_WRITE_QUERIES=true). SQL injection protection is bypassed.")
 	}
 
+	// Log OAuth mode status
+	if oauthEnabled {
+		log.Println("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true)")
+		if jwtSecret == "" {
+			log.Println("WARNING: JWT_SECRET not set. Using insecure default for development only.")
+		}
+	}
+
 	return &TrinoConfig{
 		Host:              getEnv("TRINO_HOST", "localhost"),
 		Port:              port,
@@ -70,6 +85,8 @@ func NewTrinoConfig() *TrinoConfig {
 		SSLInsecure:       sslInsecure,
 		AllowWriteQueries: allowWriteQueries,
 		QueryTimeout:      queryTimeout,
+		OAuthEnabled:      oauthEnabled,
+		JWTSecret:         jwtSecret,
 	}
 }
 
