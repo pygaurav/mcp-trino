@@ -26,7 +26,7 @@ Trino (formerly PrestoSQL) is a powerful distributed SQL query engine designed f
 - ✅ Catalog, schema, and table discovery
 - ✅ Docker container support
 - ✅ Supports both STDIO and HTTP transports
-- ✅ StreamableHTTP support with JWT authentication (upgraded from SSE)
+- ⚠️ StreamableHTTP support with JWT authentication (upgraded from SSE) - **Basic implementation**
 - ✅ Backward compatibility with SSE endpoints
 - ✅ Compatible with Cursor, Claude Desktop, Windsurf, ChatWise, and any MCP-compatible clients.
 
@@ -587,13 +587,18 @@ The server supports two transport methods:
 - Supports web-based MCP clients
 - Enables JWT authentication for secure access
 
-### JWT Authentication (OAuth 2.1)
+### JWT Authentication (OAuth 2.1) - Basic Implementation
+
+⚠️ **Security Notice**: This is a basic JWT implementation suitable for development and testing. For production use, consider implementing proper OAuth 2.1/OpenID Connect integration with established providers.
 
 When `TRINO_OAUTH_ENABLED=true`, the server requires JWT tokens for authentication:
 
 ```bash
 # Enable OAuth authentication
 export TRINO_OAUTH_ENABLED=true
+
+# Set JWT secret for token validation (REQUIRED for production)
+export JWT_SECRET=your-secret-key-here
 
 # Start server with HTTP transport
 export MCP_TRANSPORT=http
@@ -640,7 +645,8 @@ const payload = {
   exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) // 24 hours
 };
 
-const token = jwt.sign(payload, 'your-secret-key');
+// Use the same secret as JWT_SECRET environment variable
+const token = jwt.sign(payload, process.env.JWT_SECRET || 'your-secret-key');
 console.log(token);
 ```
 
@@ -648,6 +654,7 @@ console.log(token);
 ```python
 import jwt
 import datetime
+import os
 
 payload = {
     'sub': 'user123',
@@ -657,7 +664,9 @@ payload = {
     'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
 }
 
-token = jwt.encode(payload, 'your-secret-key', algorithm='HS256')
+# Use the same secret as JWT_SECRET environment variable
+secret = os.getenv('JWT_SECRET', 'your-secret-key')
+token = jwt.encode(payload, secret, algorithm='HS256')
 print(token)
 ```
 
@@ -667,11 +676,18 @@ package main
 
 import (
     "fmt"
+    "os"
     "time"
     "github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
+    // Use the same secret as JWT_SECRET environment variable
+    secret := os.Getenv("JWT_SECRET")
+    if secret == "" {
+        secret = "your-secret-key"
+    }
+    
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
         "sub": "user123",
         "preferred_username": "john.doe",
@@ -680,7 +696,7 @@ func main() {
         "exp": time.Now().Add(time.Hour * 24).Unix(),
     })
 
-    tokenString, _ := token.SignedString([]byte("your-secret-key"))
+    tokenString, _ := token.SignedString([]byte(secret))
     fmt.Println(tokenString)
 }
 ```
@@ -698,6 +714,8 @@ echo '{"sub":"user123","preferred_username":"john.doe","email":"john.doe@example
 - Implement proper key rotation and management
 - Use RS256 or ES256 algorithms with proper key pairs
 - Validate tokens with proper issuer verification
+- Set strong JWT_SECRET (minimum 256 bits)
+- Consider implementing token refresh mechanisms
 
 **Testing Your Token:**
 ```bash
@@ -835,6 +853,7 @@ Here's a complete example to get started with JWT authentication:
 1. **Generate a test JWT token** (using Node.js):
    ```bash
    npm install jsonwebtoken
+   export JWT_SECRET="test-secret-key"
    node -e "
    const jwt = require('jsonwebtoken');
    const token = jwt.sign({
@@ -842,7 +861,7 @@ Here's a complete example to get started with JWT authentication:
      preferred_username: 'testuser',
      email: 'test@example.com',
      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
-   }, 'test-secret-key');
+   }, process.env.JWT_SECRET);
    console.log('JWT Token:', token);
    "
    ```
@@ -851,6 +870,7 @@ Here's a complete example to get started with JWT authentication:
    ```bash
    MCP_TRANSPORT=http \
    TRINO_OAUTH_ENABLED=true \
+   JWT_SECRET="test-secret-key" \
    TRINO_HOST=localhost \
    TRINO_PORT=8080 \
    TRINO_USER=trino \
@@ -900,6 +920,7 @@ The server can be configured using the following environment variables:
 | MCP_PORT               | HTTP port for http transport      | 8080      |
 | MCP_HOST               | Host for HTTP callbacks           | localhost |
 | TRINO_OAUTH_ENABLED    | Enable OAuth/JWT authentication   | false     |
+| JWT_SECRET             | JWT signing secret (REQUIRED for production) | (empty) |
 | HTTPS_CERT_FILE        | Path to HTTPS certificate file    | (empty)   |
 | HTTPS_KEY_FILE         | Path to HTTPS private key file    | (empty)   |
 

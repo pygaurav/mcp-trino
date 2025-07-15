@@ -14,7 +14,7 @@ export TRINO_USER=${TRINO_USER:-trino}
 export TRINO_CATALOG=${TRINO_CATALOG:-memory}
 export TRINO_SCHEMA=${TRINO_SCHEMA:-default}
 export MCP_TRANSPORT=${MCP_TRANSPORT:-stdio}
-export MCP_PORT=${MCP_PORT:-9097}
+export MCP_PORT=${MCP_PORT:-8080}
 
 echo "Starting Trino MCP Server with ${MCP_TRANSPORT} transport..."
 echo "Connected to Trino at ${TRINO_HOST}:${TRINO_PORT}"

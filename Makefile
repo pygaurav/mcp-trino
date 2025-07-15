@@ -52,7 +52,7 @@ run:
 # Build and run Docker image
 run-docker: build
 	docker build -t $(BINARY_NAME):$(VERSION) .
-	docker run -p 9097:9097 $(BINARY_NAME):$(VERSION)
+	docker run -p 8080:8080 $(BINARY_NAME):$(VERSION)
 
 # Start the application with Docker Compose
 docker-compose-up:

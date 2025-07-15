@@ -79,7 +79,7 @@ This project provides a complete reimplementation of the Trino MCP Server in Go 
 
 3. **Run with HTTP transport** (for API access):
    ```bash
-   MCP_TRANSPORT=http MCP_PORT=9097 ./scripts/run.sh
+   MCP_TRANSPORT=http MCP_PORT=8080 ./scripts/run.sh
    ```
 
 4. **Run with Docker Compose**:

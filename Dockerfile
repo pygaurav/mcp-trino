@@ -45,7 +45,7 @@ ENV TRINO_HOST="trino" \
     TRINO_SCHEMA="default" \
     MCP_TRANSPORT="http" \
     MCP_HOST="0.0.0.0" \
-    MCP_PORT="9097"
+    MCP_PORT="8080"
 
 # Expose the port
 EXPOSE ${MCP_PORT}
