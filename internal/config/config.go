@@ -25,6 +25,7 @@ type TrinoConfig struct {
 	
 	// OAuth mode configuration
 	OAuthEnabled      bool   // Enable OAuth 2.1 authentication
+	JWTSecret         string // JWT signing secret for token validation
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
@@ -35,6 +36,7 @@ func NewTrinoConfig() *TrinoConfig {
 	scheme := getEnv("TRINO_SCHEME", "https")
 	allowWriteQueries, _ := strconv.ParseBool(getEnv("TRINO_ALLOW_WRITE_QUERIES", "false"))
 	oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
+	jwtSecret := getEnv("JWT_SECRET", "")
 
 	// Parse query timeout from environment variable
 	const defaultTimeout = 30
@@ -66,6 +68,9 @@ func NewTrinoConfig() *TrinoConfig {
 	// Log OAuth mode status
 	if oauthEnabled {
 		log.Println("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true)")
+		if jwtSecret == "" {
+			log.Println("WARNING: JWT_SECRET not set. Using insecure default for development only.")
+		}
 	}
 
 	return &TrinoConfig{
@@ -81,6 +86,7 @@ func NewTrinoConfig() *TrinoConfig {
 		AllowWriteQueries: allowWriteQueries,
 		QueryTimeout:      queryTimeout,
 		OAuthEnabled:      oauthEnabled,
+		JWTSecret:         jwtSecret,
 	}
 }
 

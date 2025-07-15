@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -78,21 +80,43 @@ type User struct {
 	Subject  string
 }
 
-// validateJWT performs basic JWT validation
+// validateJWT performs JWT validation with proper signature verification
 func validateJWT(tokenString string) (*User, error) {
 	// Remove Bearer prefix if present
 	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
 	
-	// Parse JWT without verification for now (simplified)
-	// In production, you should verify with proper key
-	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
+	// Get JWT secret from environment or use default for development
+	jwtSecret := getEnv("JWT_SECRET", "")
+	if jwtSecret == "" {
+		log.Println("WARNING: JWT_SECRET not set. Using insecure default for development only.")
+		jwtSecret = "dev-secret-key-change-in-production"
+	}
+	
+	// Parse and validate JWT with signature verification
+	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		// Validate signing method
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(jwtSecret), nil
+	})
+	
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
+		return nil, fmt.Errorf("failed to parse and validate token: %w", err)
+	}
+
+	if !token.Valid {
+		return nil, fmt.Errorf("invalid token")
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
 		return nil, fmt.Errorf("invalid token claims")
+	}
+
+	// Validate required claims
+	if err := validateTokenClaims(claims); err != nil {
+		return nil, fmt.Errorf("token validation failed: %w", err)
 	}
 
 	// Extract user information
@@ -107,6 +131,46 @@ func validateJWT(tokenString string) (*User, error) {
 	}
 
 	return user, nil
+}
+
+// validateTokenClaims validates standard JWT claims
+func validateTokenClaims(claims jwt.MapClaims) error {
+	// Validate expiration
+	if exp, ok := claims["exp"]; ok {
+		if expTime, ok := exp.(float64); ok {
+			if time.Now().Unix() > int64(expTime) {
+				return fmt.Errorf("token expired")
+			}
+		}
+	}
+	
+	// Validate not before
+	if nbf, ok := claims["nbf"]; ok {
+		if nbfTime, ok := nbf.(float64); ok {
+			if time.Now().Unix() < int64(nbfTime) {
+				return fmt.Errorf("token not yet valid")
+			}
+		}
+	}
+	
+	// Validate issued at (should not be in the future)
+	if iat, ok := claims["iat"]; ok {
+		if iatTime, ok := iat.(float64); ok {
+			if time.Now().Unix() < int64(iatTime) {
+				return fmt.Errorf("token issued in the future")
+			}
+		}
+	}
+	
+	return nil
+}
+
+// getEnv retrieves environment variable with fallback
+func getEnv(key, fallback string) string {
+	if value, exists := os.LookupEnv(key); exists {
+		return value
+	}
+	return fallback
 }
 
 // getStringClaim safely extracts a string claim
