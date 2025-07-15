@@ -597,13 +597,19 @@ When `TRINO_OAUTH_ENABLED=true`, the server requires JWT tokens for authenticati
 # Enable OAuth authentication
 export TRINO_OAUTH_ENABLED=true
 
-# Set JWT secret for token validation (REQUIRED for production)
+# Set JWT secret for token validation (REQUIRED - no fallback)
 export JWT_SECRET=your-secret-key-here
 
 # Start server with HTTP transport
 export MCP_TRANSPORT=http
 mcp-trino
 ```
+
+**Security Improvements:**
+- **JWT Secret Caching**: Uses `sync.Once` pattern for efficient secret caching
+- **No Default Fallback**: JWT_SECRET is required - no insecure default values
+- **Proper JWT Validation**: Implements signature verification with proper error handling
+- **Graceful Shutdown**: HTTP server implements graceful shutdown with timeout
 
 Client requests must include the JWT token in the Authorization header:
 ```http
@@ -645,8 +651,12 @@ const payload = {
   exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24) // 24 hours
 };
 
-// Use the same secret as JWT_SECRET environment variable
-const token = jwt.sign(payload, process.env.JWT_SECRET || 'your-secret-key');
+// Use the same secret as JWT_SECRET environment variable (required)
+const secret = process.env.JWT_SECRET;
+if (!secret) {
+  throw new Error('JWT_SECRET environment variable is required');
+}
+const token = jwt.sign(payload, secret);
 console.log(token);
 ```
 
@@ -664,8 +674,10 @@ payload = {
     'exp': datetime.datetime.utcnow() + datetime.timedelta(days=1)
 }
 
-# Use the same secret as JWT_SECRET environment variable
-secret = os.getenv('JWT_SECRET', 'your-secret-key')
+# Use the same secret as JWT_SECRET environment variable (required)
+secret = os.getenv('JWT_SECRET')
+if not secret:
+    raise ValueError('JWT_SECRET environment variable is required')
 token = jwt.encode(payload, secret, algorithm='HS256')
 print(token)
 ```
@@ -676,16 +688,17 @@ package main
 
 import (
     "fmt"
+    "log"
     "os"
     "time"
     "github.com/golang-jwt/jwt/v5"
 )
 
 func main() {
-    // Use the same secret as JWT_SECRET environment variable
+    // Use the same secret as JWT_SECRET environment variable (required)
     secret := os.Getenv("JWT_SECRET")
     if secret == "" {
-        secret = "your-secret-key"
+        log.Fatal("JWT_SECRET environment variable is required")
     }
     
     token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
@@ -696,7 +709,10 @@ func main() {
         "exp": time.Now().Add(time.Hour * 24).Unix(),
     })
 
-    tokenString, _ := token.SignedString([]byte(secret))
+    tokenString, err := token.SignedString([]byte(secret))
+    if err != nil {
+        log.Fatal("Failed to sign token:", err)
+    }
     fmt.Println(tokenString)
 }
 ```
@@ -714,8 +730,14 @@ echo '{"sub":"user123","preferred_username":"john.doe","email":"john.doe@example
 - Implement proper key rotation and management
 - Use RS256 or ES256 algorithms with proper key pairs
 - Validate tokens with proper issuer verification
-- Set strong JWT_SECRET (minimum 256 bits)
+- Set strong JWT_SECRET (minimum 256 bits) - **REQUIRED, no fallback**
 - Consider implementing token refresh mechanisms
+- **Security Enhancements Applied:**
+  - JWT secret caching with `sync.Once` pattern for performance
+  - Proper JWT signature verification (no ParseUnverified)
+  - Consolidated authentication logic to eliminate duplication
+  - Graceful HTTP server shutdown with timeout
+  - No insecure default secrets
 
 **Testing Your Token:**
 ```bash
@@ -853,15 +875,19 @@ Here's a complete example to get started with JWT authentication:
 1. **Generate a test JWT token** (using Node.js):
    ```bash
    npm install jsonwebtoken
-   export JWT_SECRET="test-secret-key"
+   export JWT_SECRET="test-secret-key-minimum-256-bits"
    node -e "
    const jwt = require('jsonwebtoken');
+   const secret = process.env.JWT_SECRET;
+   if (!secret) {
+     throw new Error('JWT_SECRET environment variable is required');
+   }
    const token = jwt.sign({
      sub: 'test-user',
      preferred_username: 'testuser',
      email: 'test@example.com',
      exp: Math.floor(Date.now() / 1000) + (60 * 60 * 24)
-   }, process.env.JWT_SECRET);
+   }, secret);
    console.log('JWT Token:', token);
    "
    ```
@@ -870,7 +896,7 @@ Here's a complete example to get started with JWT authentication:
    ```bash
    MCP_TRANSPORT=http \
    TRINO_OAUTH_ENABLED=true \
-   JWT_SECRET="test-secret-key" \
+   JWT_SECRET="test-secret-key-minimum-256-bits" \
    TRINO_HOST=localhost \
    TRINO_PORT=8080 \
    TRINO_USER=trino \

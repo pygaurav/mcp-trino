@@ -305,27 +305,30 @@ type TrinoConfig struct {
 }
 ```
 
-### 2. Bearer Token Validation (`internal/auth/bearer.go`)
+### 2. Bearer Token Validation (`internal/auth/oauth.go`)
 - **Current Implementation**: JWT token validation using `github.com/golang-jwt/jwt/v5`
-- **RSA Signature Verification**: Uses RSA public key for JWT signature validation
-- **Claims Extraction**: Standard JWT claims parsing with issuer and audience validation
+- **Proper JWT Signature Verification**: Uses HMAC-SHA256 with proper signature validation (no ParseUnverified)
+- **Claims Extraction**: Standard JWT claims parsing with required subject validation
 - **Error Handling**: Standardized OAuth 2.1 error responses
 - **User Context**: Extracts user information from JWT claims
-- **Note**: Token acquisition and refresh handled by Claude Code/mcp-remote
+- **JWT Secret Caching**: Implements `sync.Once` pattern for efficient secret caching
+- **Security Improvements**: No insecure default fallbacks, proper signature verification
 
 ### 3. OAuth Provider Configuration (`internal/config/config.go`)
 - **OAuth Flag**: Simple boolean flag `OAuthEnabled` to enable/disable OAuth authentication
 - **Environment Variables**: Configuration through standard environment variables
+- **JWT Secret Management**: JWT_SECRET environment variable required (no default fallback)
 - **Basic Integration**: OAuth provider information configured via environment
 - **Validation**: Simple validation of OAuth configuration parameters
 - **Logging**: OAuth mode status logging for debugging
 
-### 4. HTTP Authentication Middleware (`internal/middleware/auth.go`)
+### 4. HTTP Authentication Implementation (`internal/auth/oauth.go`)
 - **Bearer Token Extraction**: Extracts Bearer tokens from Authorization headers
-- **Custom JWT Validation**: Token validation using custom bearer token validator
+- **Consolidated JWT Validation**: Shared `authenticateRequest()` function eliminates code duplication
 - **User Context Injection**: Add authenticated user context to requests
 - **Error Handling**: OAuth 2.1 compliant error responses with specific error types
-- **Optional Authentication**: Supports both required and optional authentication modes
+- **Server-Level Authentication**: Uses MCP request hooks for complete API protection
+- **Performance Optimizations**: JWT secret caching reduces environment variable lookups
 
 ### 5. Simplified Trino Client Integration (`internal/trino/client.go`)
 - **OAuth Mode**: Use existing basic auth or anonymous connection to Trino (unchanged)
@@ -367,6 +370,7 @@ type TrinoConfig struct {
 - **Remote Access**: HTTP server setup for remote MCP client connections
 - **Public Metadata Endpoint**: Serves OAuth authorization server metadata without authentication
 - **Route Handling**: Unauthenticated endpoints (status, metadata) processed before authentication middleware
+- **Graceful Shutdown**: Implements graceful HTTP server shutdown with 30-second timeout
 
 ## Authentication Configuration Options
 
@@ -551,6 +555,9 @@ The sequence diagrams above illustrate the complete OAuth authentication flow. H
 # Enable OAuth Authentication
 TRINO_OAUTH_ENABLED=true
 
+# JWT Secret (REQUIRED - no default fallback)
+JWT_SECRET=your-256-bit-secret-key
+
 # Trino Connection (unchanged)
 TRINO_HOST=trino.example.com
 TRINO_PORT=443
@@ -637,7 +644,13 @@ The current codebase has **complete OAuth/JWT authentication implementation**. A
 
 ### Key Implementation Features:
 - **Public Metadata Endpoint**: `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration` accessible without authentication
-- **JWT Token Validation**: RSA signature verification with proper claims validation
+- **JWT Token Validation**: HMAC-SHA256 signature verification with proper claims validation
 - **Route Segregation**: Unauthenticated endpoints processed before authentication middleware
 - **Provider Discovery**: Automatic OAuth provider configuration discovery
 - **MCP Specification Compliance**: Full compliance with MCP June 2025 authorization specification
+- **Security Enhancements**: 
+  - JWT secret caching with `sync.Once` pattern
+  - Consolidated authentication logic (DRY principle)
+  - Proper JWT signature verification (no ParseUnverified)
+  - No insecure default fallbacks
+  - Graceful HTTP server shutdown

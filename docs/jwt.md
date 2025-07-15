@@ -69,10 +69,11 @@ sequenceDiagram
 
 ### 1. Configuration
 
-OAuth is controlled via environment variable:
+OAuth is controlled via environment variables:
 
 ```bash
 TRINO_OAUTH_ENABLED=true  # Enable OAuth authentication
+JWT_SECRET=your-secret-key  # JWT signing secret (REQUIRED - no default)
 ```
 
 ### 2. Context Management
@@ -116,14 +117,8 @@ func GetOAuthToken(ctx context.Context) (string, bool) {
 ```go
 func CreateRequestAuthHook() func(context.Context, interface{}, interface{}) error {
     return func(ctx context.Context, id interface{}, message interface{}) error {
-        // Extract token from context
-        tokenString, ok := GetOAuthToken(ctx)
-        if !ok {
-            return fmt.Errorf("authentication required: missing OAuth token")
-        }
-
-        // Validate JWT token
-        user, err := validateJWT(tokenString)
+        // Use shared authentication function (DRY principle)
+        user, err := authenticateRequest(ctx)
         if err != nil {
             return fmt.Errorf("authentication failed: %w", err)
         }
@@ -131,6 +126,25 @@ func CreateRequestAuthHook() func(context.Context, interface{}, interface{}) err
         log.Printf("OAuth: Authenticated user %s for request ID: %v", user.Username, id)
         return nil // Allow request to proceed
     }
+}
+```
+
+**Consolidated Authentication Function** (`internal/auth/oauth.go`):
+```go
+func authenticateRequest(ctx context.Context) (*User, error) {
+    // Extract token from context
+    tokenString, ok := GetOAuthToken(ctx)
+    if !ok {
+        return nil, fmt.Errorf("authentication required: missing OAuth token")
+    }
+
+    // Validate JWT token with proper signature verification
+    user, err := validateJWT(tokenString)
+    if err != nil {
+        return nil, fmt.Errorf("authentication failed: %w", err)
+    }
+
+    return user, nil
 }
 ```
 
@@ -150,21 +164,38 @@ mcpServer := server.NewMCPServer("Trino MCP Server", Version,
 
 ### 4. JWT Validation
 
-**Simplified JWT Parser** (`internal/auth/oauth.go`):
+**Secure JWT Parser with Signature Verification** (`internal/auth/oauth.go`):
 ```go
 func validateJWT(tokenString string) (*User, error) {
     // Remove Bearer prefix if present
     tokenString = strings.TrimPrefix(tokenString, "Bearer ")
     
-    // Parse JWT without verification (simplified for development)
-    token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
+    // Get cached JWT secret
+    secret, err := getJWTSecret()
+    if err != nil {
+        return nil, fmt.Errorf("JWT secret not configured: %w", err)
+    }
+
+    // Parse JWT with proper signature verification
+    token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+        if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+            return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+        }
+        return []byte(secret), nil
+    })
+
     if err != nil {
         return nil, fmt.Errorf("failed to parse token: %w", err)
     }
 
     claims, ok := token.Claims.(jwt.MapClaims)
-    if !ok {
+    if !ok || !token.Valid {
         return nil, fmt.Errorf("invalid token claims")
+    }
+
+    // Validate required claims
+    if err := validateJWTClaims(claims); err != nil {
+        return nil, fmt.Errorf("invalid token claims: %w", err)
     }
 
     // Extract user information
@@ -179,6 +210,26 @@ func validateJWT(tokenString string) (*User, error) {
     }
 
     return user, nil
+}
+```
+
+**JWT Secret Caching** (`internal/auth/oauth.go`):
+```go
+var (
+    jwtSecret     string
+    jwtSecretOnce sync.Once
+)
+
+func getJWTSecret() (string, error) {
+    jwtSecretOnce.Do(func() {
+        jwtSecret = os.Getenv("JWT_SECRET")
+    })
+    
+    if jwtSecret == "" {
+        return "", fmt.Errorf("JWT_SECRET environment variable is required")
+    }
+    
+    return jwtSecret, nil
 }
 ```
 
@@ -326,10 +377,15 @@ This ensures:
 ### Production Considerations
 
 1. **HTTPS Required**: OAuth should always use HTTPS in production
-2. **JWT Signature Verification**: Replace simplified validation with proper signature verification
-3. **Token Expiration**: Implement proper token expiration checking
+2. **JWT Signature Verification**: ✅ **IMPLEMENTED** - Proper signature verification with HMAC-SHA256
+3. **Token Expiration**: ✅ **IMPLEMENTED** - Proper token expiration checking with claims validation
 4. **Rate Limiting**: Add rate limiting middleware after authentication
 5. **Audit Logging**: Log all authentication attempts
+6. **Security Improvements Applied**:
+   - JWT secret caching with `sync.Once` pattern
+   - No insecure default fallbacks
+   - Consolidated authentication logic
+   - Graceful HTTP server shutdown
 
 ## Security Features
 
@@ -390,12 +446,18 @@ OAuth: Authenticated user testuser for request ID: 1
 ## Implementation Status
 
 - ✅ **Server-Level Authentication**: Complete API protection
-- ✅ **JWT Validation**: Simplified token parsing  
+- ✅ **JWT Validation**: Secure token parsing with proper signature verification
 - ✅ **StreamableHTTP Transport**: Modern HTTP streaming
 - ✅ **Session Management**: Proper MCP session handling
 - ✅ **Context Management**: Shared context keys
 - ✅ **Error Handling**: Descriptive error messages
 - ✅ **Testing Framework**: Comprehensive test scripts
 - ✅ **Client Integration**: Claude Code compatibility
+- ✅ **Security Enhancements**: 
+  - JWT secret caching with `sync.Once` pattern
+  - Proper JWT signature verification (no ParseUnverified)
+  - Consolidated authentication logic (DRY principle)
+  - No insecure default fallbacks
+  - Graceful HTTP server shutdown with timeout
 
-The OAuth 2.1 implementation provides complete security for the mcp-trino server with modern transport and proper authentication for all MCP methods.
+The OAuth 2.1 implementation provides complete security for the mcp-trino server with modern transport, proper authentication for all MCP methods, and production-ready security features.
