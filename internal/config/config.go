@@ -25,7 +25,14 @@ type TrinoConfig struct {
 	
 	// OAuth mode configuration
 	OAuthEnabled      bool   // Enable OAuth 2.1 authentication
-	JWTSecret         string // JWT signing secret for token validation
+	OAuthProvider     string // OAuth provider: "hmac", "okta", "google", "azure"
+	JWTSecret         string // JWT signing secret for HMAC provider
+	
+	// OIDC provider configuration
+	OIDCIssuer        string // OIDC issuer URL
+	OIDCAudience      string // OIDC audience
+	OIDCClientID      string // OIDC client ID
+	OIDCClientSecret  string // OIDC client secret
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
@@ -36,7 +43,14 @@ func NewTrinoConfig() *TrinoConfig {
 	scheme := getEnv("TRINO_SCHEME", "https")
 	allowWriteQueries, _ := strconv.ParseBool(getEnv("TRINO_ALLOW_WRITE_QUERIES", "false"))
 	oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
+	oauthProvider := strings.ToLower(getEnv("OAUTH_PROVIDER", "hmac"))
 	jwtSecret := getEnv("JWT_SECRET", "")
+	
+	// OIDC configuration
+	oidcIssuer := getEnv("OIDC_ISSUER", "")
+	oidcAudience := getEnv("OIDC_AUDIENCE", "")
+	oidcClientID := getEnv("OIDC_CLIENT_ID", "")
+	oidcClientSecret := getEnv("OIDC_CLIENT_SECRET", "")
 
 	// Parse query timeout from environment variable
 	const defaultTimeout = 30
@@ -67,9 +81,12 @@ func NewTrinoConfig() *TrinoConfig {
 
 	// Log OAuth mode status
 	if oauthEnabled {
-		log.Println("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true)")
-		if jwtSecret == "" {
-			log.Println("WARNING: JWT_SECRET not set. Using insecure default for development only.")
+		log.Printf("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true) with provider: %s", oauthProvider)
+		if oauthProvider == "hmac" && jwtSecret == "" {
+			log.Println("WARNING: JWT_SECRET not set for HMAC provider. Using insecure default for development only.")
+		}
+		if oauthProvider != "hmac" && oidcIssuer == "" {
+			log.Printf("WARNING: OIDC_ISSUER not set for %s provider. OAuth authentication may fail.", oauthProvider)
 		}
 	}
 
@@ -86,7 +103,12 @@ func NewTrinoConfig() *TrinoConfig {
 		AllowWriteQueries: allowWriteQueries,
 		QueryTimeout:      queryTimeout,
 		OAuthEnabled:      oauthEnabled,
+		OAuthProvider:     oauthProvider,
 		JWTSecret:         jwtSecret,
+		OIDCIssuer:        oidcIssuer,
+		OIDCAudience:      oidcAudience,
+		OIDCClientID:      oidcClientID,
+		OIDCClientSecret:  oidcClientSecret,
 	}
 }
 

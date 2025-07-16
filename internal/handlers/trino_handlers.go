@@ -8,6 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/tuannvm/mcp-trino/internal/auth"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -196,21 +197,43 @@ func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallTool
 
 // RegisterTrinoTools registers all Trino-related tools with the MCP server
 func RegisterTrinoTools(m *server.MCPServer, h *TrinoHandlers) {
+	// Get OAuth middleware if available
+	var middleware func(server.ToolHandlerFunc) server.ToolHandlerFunc
+	if oauthMiddleware := auth.GetOAuthMiddleware(m); oauthMiddleware != nil {
+		middleware = oauthMiddleware
+	}
+	
+	// Helper function to apply middleware if available
+	applyMiddleware := func(handler server.ToolHandlerFunc) server.ToolHandlerFunc {
+		if middleware != nil {
+			return middleware(handler)
+		}
+		return handler
+	}
+	
 	m.AddTool(mcp.NewTool("execute_query",
 		mcp.WithDescription("Execute a SQL query"),
 		mcp.WithString("query", mcp.Required(), mcp.Description("SQL query")),
-	), h.ExecuteQuery)
-	m.AddTool(mcp.NewTool("list_catalogs", mcp.WithDescription("List catalogs")), h.ListCatalogs)
+	), applyMiddleware(h.ExecuteQuery))
+	
+	m.AddTool(mcp.NewTool("list_catalogs", mcp.WithDescription("List catalogs")), 
+		applyMiddleware(h.ListCatalogs))
+	
 	m.AddTool(mcp.NewTool("list_schemas",
 		mcp.WithDescription("List schemas"),
-		mcp.WithString("catalog", mcp.Description("Catalog"))), h.ListSchemas)
+		mcp.WithString("catalog", mcp.Description("Catalog"))), 
+		applyMiddleware(h.ListSchemas))
+	
 	m.AddTool(mcp.NewTool("list_tables",
 		mcp.WithDescription("List tables"),
 		mcp.WithString("catalog", mcp.Description("Catalog")),
-		mcp.WithString("schema", mcp.Description("Schema"))), h.ListTables)
+		mcp.WithString("schema", mcp.Description("Schema"))), 
+		applyMiddleware(h.ListTables))
+	
 	m.AddTool(mcp.NewTool("get_table_schema",
 		mcp.WithDescription("Get table schema"),
 		mcp.WithString("catalog", mcp.Description("Catalog")),
 		mcp.WithString("schema", mcp.Description("Schema")),
-		mcp.WithString("table", mcp.Required(), mcp.Description("Table"))), h.GetTableSchema)
+		mcp.WithString("table", mcp.Required(), mcp.Description("Table"))), 
+		applyMiddleware(h.GetTableSchema))
 }

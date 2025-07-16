@@ -52,37 +52,13 @@ func GetOAuthToken(ctx context.Context) (string, bool) {
 	return token, ok
 }
 
-// authenticateRequest performs JWT validation and returns user context
-// This shared function consolidates authentication logic used by both OAuthMiddleware and CreateRequestAuthHook
+// authenticateRequest is deprecated - authentication is now handled by provider-based middleware
 func authenticateRequest(ctx context.Context, operation string) (context.Context, error) {
-	tokenString, ok := GetOAuthToken(ctx)
-	if !ok {
-		log.Printf("OAuth: No token found in context for %s", operation)
-		return ctx, fmt.Errorf("authentication required: missing OAuth token")
-	}
-
-	// Log token for debugging (first 50 chars)
-	tokenPreview := tokenString
-	if len(tokenString) > 50 {
-		tokenPreview = tokenString[:50] + "..."
-	}
-	log.Printf("OAuth: Received token for %s: %s", operation, tokenPreview)
-
-	// JWT validation
-	user, err := validateJWT(tokenString)
-	if err != nil {
-		log.Printf("OAuth: Token validation failed for %s: %v", operation, err)
-		return ctx, fmt.Errorf("authentication failed: %w", err)
-	}
-
-	// Add user to context
-	ctx = context.WithValue(ctx, userContextKey, user)
-	log.Printf("OAuth: Authenticated user %s for %s", user.Username, operation)
-	return ctx, nil
+	return ctx, fmt.Errorf("deprecated authentication function called - use provider-based validation")
 }
 
 // OAuthMiddleware creates an authentication middleware for MCP tools
-func OAuthMiddleware(enabled bool) func(server.ToolHandlerFunc) server.ToolHandlerFunc {
+func OAuthMiddleware(validator TokenValidator, enabled bool) func(server.ToolHandlerFunc) server.ToolHandlerFunc {
 	return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
 		return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if !enabled {
@@ -91,13 +67,32 @@ func OAuthMiddleware(enabled bool) func(server.ToolHandlerFunc) server.ToolHandl
 				return next(ctx, req)
 			}
 
-			// Use shared authentication logic
-			authenticatedCtx, err := authenticateRequest(ctx, fmt.Sprintf("tool: %s", req.Params.Name))
-			if err != nil {
-				return nil, err
+			// Extract token from context (set by HTTP middleware)
+			tokenString, ok := GetOAuthToken(ctx)
+			if !ok {
+				log.Printf("OAuth: No token found in context for tool: %s", req.Params.Name)
+				return nil, fmt.Errorf("authentication required: missing OAuth token")
 			}
 
-			return next(authenticatedCtx, req)
+			// Log token for debugging (first 50 chars)
+			tokenPreview := tokenString
+			if len(tokenString) > 50 {
+				tokenPreview = tokenString[:50] + "..."
+			}
+			log.Printf("OAuth: Received token for tool %s: %s", req.Params.Name, tokenPreview)
+
+			// Validate token using configured provider
+			user, err := validator.ValidateToken(tokenString)
+			if err != nil {
+				log.Printf("OAuth: Token validation failed for tool %s: %v", req.Params.Name, err)
+				return nil, fmt.Errorf("authentication failed: %w", err)
+			}
+
+			// Add user to context for downstream handlers
+			ctx = context.WithValue(ctx, userContextKey, user)
+			log.Printf("OAuth: Authenticated user %s for tool: %s", user.Username, req.Params.Name)
+
+			return next(ctx, req)
 		}
 	}
 }
@@ -109,57 +104,7 @@ type User struct {
 	Subject  string
 }
 
-// validateJWT performs JWT validation with proper signature verification
-func validateJWT(tokenString string) (*User, error) {
-	// Remove Bearer prefix if present
-	tokenString = strings.TrimPrefix(tokenString, "Bearer ")
-	
-	// Get cached JWT secret
-	secret, err := getJWTSecret()
-	if err != nil {
-		return nil, fmt.Errorf("JWT secret not configured: %w", err)
-	}
-	
-	// Parse and validate JWT with signature verification
-	token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-		// Validate signing method
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(secret), nil
-	})
-	
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse and validate token: %w", err)
-	}
-
-	if !token.Valid {
-		return nil, fmt.Errorf("invalid token")
-	}
-
-	claims, ok := token.Claims.(jwt.MapClaims)
-	if !ok {
-		return nil, fmt.Errorf("invalid token claims")
-	}
-
-	// Validate required claims
-	if err := validateTokenClaims(claims); err != nil {
-		return nil, fmt.Errorf("token validation failed: %w", err)
-	}
-
-	// Extract user information
-	user := &User{
-		Subject:  getStringClaim(claims, "sub"),
-		Username: getStringClaim(claims, "preferred_username"),
-		Email:    getStringClaim(claims, "email"),
-	}
-
-	if user.Subject == "" {
-		return nil, fmt.Errorf("missing subject in token")
-	}
-
-	return user, nil
-}
+// validateJWT is deprecated - use provider-based validation instead
 
 // validateTokenClaims validates standard JWT claims
 func validateTokenClaims(claims jwt.MapClaims) error {
@@ -231,10 +176,33 @@ func CreateHTTPContextFunc() func(context.Context, *http.Request) context.Contex
 }
 
 // CreateRequestAuthHook creates a server-level authentication hook for all MCP requests
-func CreateRequestAuthHook() func(context.Context, interface{}, interface{}) error {
+func CreateRequestAuthHook(validator TokenValidator) func(context.Context, interface{}, interface{}) error {
 	return func(ctx context.Context, id interface{}, message interface{}) error {
-		// Use shared authentication logic
-		_, err := authenticateRequest(ctx, fmt.Sprintf("request ID: %v", id))
-		return err // Return error if authentication failed, nil if successful
+		// Extract OAuth token from context
+		tokenString, ok := GetOAuthToken(ctx)
+		if !ok {
+			log.Printf("OAuth: No token found in context for request ID: %v", id)
+			return fmt.Errorf("authentication required: missing OAuth token")
+		}
+
+		// Log token for debugging (first 50 chars)
+		tokenPreview := tokenString
+		if len(tokenString) > 50 {
+			tokenPreview = tokenString[:50] + "..."
+		}
+		log.Printf("OAuth: Validating token for request ID %v: %s", id, tokenPreview)
+
+		// Validate token using configured provider
+		user, err := validator.ValidateToken(tokenString)
+		if err != nil {
+			log.Printf("OAuth: Token validation failed for request ID %v: %v", id, err)
+			return fmt.Errorf("authentication failed: %w", err)
+		}
+
+		// Add user to context for downstream handlers
+		ctx = context.WithValue(ctx, userContextKey, user)
+		log.Printf("OAuth: Authenticated user %s for request ID: %v", user.Username, id)
+
+		return nil // Success
 	}
 }
