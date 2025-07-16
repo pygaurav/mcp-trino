@@ -52,6 +52,9 @@ func (s *HTTPServer) Start(port string) error {
 	// Add status endpoint
 	mux.HandleFunc("/", s.handleStatus)
 	
+	// Add OAuth metadata endpoint for MCP compliance
+	mux.HandleFunc("/.well-known/oauth-metadata", s.handleOAuthMetadata)
+	
 	// Shared MCP handler function for both endpoints
 	mcpHandler := s.createMCPHandler(streamableServer)
 	
@@ -82,6 +85,7 @@ func (s *HTTPServer) Start(port string) error {
 			log.Printf("Starting HTTPS server on %s%s", addr, oauthStatus)
 			log.Printf("  - Modern endpoint: https://localhost%s/mcp", addr)
 			log.Printf("  - Legacy endpoint: https://localhost%s/sse (backward compatibility)", addr)
+			log.Printf("  - OAuth metadata: https://localhost%s/.well-known/oauth-metadata", addr)
 			
 			if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
@@ -93,6 +97,7 @@ func (s *HTTPServer) Start(port string) error {
 			log.Printf("Starting HTTP server on %s%s", addr, oauthStatus)
 			log.Printf("  - Modern endpoint: http://localhost%s/mcp", addr)
 			log.Printf("  - Legacy endpoint: http://localhost%s/sse (backward compatibility)", addr)
+			log.Printf("  - OAuth metadata: http://localhost%s/.well-known/oauth-metadata", addr)
 			
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTP server error: %v", err)
@@ -141,6 +146,41 @@ func (s *HTTPServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = fmt.Fprintf(w, `{"status":"ok","version":"%s"}`, s.version)
+}
+
+// handleOAuthMetadata handles the OAuth metadata endpoint for MCP compliance
+func (s *HTTPServer) handleOAuthMetadata(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "public, max-age=300") // Cache for 5 minutes
+	
+	if r.Method != "GET" {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = fmt.Fprintf(w, `{"error":"Method not allowed"}`)
+		return
+	}
+	
+	// Return OAuth metadata based on configuration
+	if !s.config.OAuthEnabled {
+		w.WriteHeader(http.StatusOK)
+		_, _ = fmt.Fprintf(w, `{
+			"oauth_enabled": false,
+			"authentication_methods": ["none"],
+			"mcp_version": "1.0.0"
+		}`)
+		return
+	}
+	
+	// OAuth enabled - return configuration metadata
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{
+		"oauth_enabled": true,
+		"authentication_methods": ["bearer_token"],
+		"token_types": ["JWT"],
+		"token_validation": "server_side",
+		"supported_flows": ["claude_code", "mcp_remote"],
+		"mcp_version": "1.0.0",
+		"server_version": "%s"
+	}`, s.version)
 }
 
 // handleSignals handles graceful shutdown signals

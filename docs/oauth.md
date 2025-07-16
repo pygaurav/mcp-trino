@@ -33,6 +33,7 @@ export MCP_HTTPS=true
 - **Scopes**: Typically `openid,profile,email` for user identification
 - **Resource Indicators**: Support RFC 8707 for audience specification (required by MCP spec)
 - **Authorization Server Metadata**: Support RFC 8414 for metadata discovery (required by MCP spec)
+- **OAuth Metadata Endpoint**: `/.well-known/oauth-metadata` endpoint for MCP client discovery
 
 ## Architecture Overview
 
@@ -342,7 +343,7 @@ type TrinoConfig struct {
 - **RFC 8414 Compliance**: Exposes OAuth metadata at `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration`
 - **Resource Indicators**: Advertises support for RFC 8707 resource indicators
 - **Provider Integration**: Proxies provider's metadata with MCP-specific additions
-- **Status**: ✅ Implemented in `cmd/main.go` with `handleOAuthMetadata` function
+- **Status**: ✅ Implemented in `internal/server/http.go` with `handleOAuthMetadata` function
 
 **CRITICAL REQUIREMENT**: The OAuth metadata endpoint MUST be publicly accessible (no authentication required) for MCP clients to discover OAuth configuration. This is handled by processing metadata requests before authentication middleware.
 
@@ -916,65 +917,38 @@ All three modes converge on the same server-side token validation logic through 
        "time"
    )
 
-   func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, cfg *config.TrinoConfig) {
-       // Use standard library context with timeout
-       ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-       defer cancel()
-       
-       // Standard HTTP headers using net/http
+   func (s *HTTPServer) handleOAuthMetadata(w http.ResponseWriter, r *http.Request) {
        w.Header().Set("Content-Type", "application/json")
-       w.Header().Set("Cache-Control", "public, max-age=3600") // Cache for 1 hour
+       w.Header().Set("Cache-Control", "public, max-age=300") // Cache for 5 minutes
        
-       switch cfg.OAuthProvider {
-       case "okta", "google", "azure":
-           // Proxy OAuth provider's metadata using standard library
-           metadata, err := fetchProviderMetadata(ctx, cfg.OIDCIssuer)
-           if err != nil {
-               http.Error(w, "Failed to fetch provider metadata", http.StatusInternalServerError)
-               return
-           }
-           
-           // Add MCP-specific extensions for both Claude Code and mcp-remote
-           metadata["resource_indicators_supported"] = true
-           metadata["mcp_server_version"] = "1.0"
-           
-           // Claude Code native OAuth flow support
-           metadata["claude_code_flow_supported"] = true
-           
-           // mcp-remote flow support (token via HTTP headers)
-           metadata["mcp_remote_flow_supported"] = true
-           metadata["token_auth_methods_supported"] = []string{"Bearer"}
-           
-           // Use standard library JSON encoder
-           if err := json.NewEncoder(w).Encode(metadata); err != nil {
-               http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-               return
-           }
-           
-       case "hmac":
-           // HMAC metadata for backward compatibility and service-to-service
-           metadata := map[string]interface{}{
-               "issuer":                    "mcp-trino-server",
-               "token_endpoint_auth_methods_supported": []string{"none"},
-               "response_types_supported":  []string{"code"},
-               "subject_types_supported":   []string{"public"},
-               "id_token_signing_alg_values_supported": []string{"HS256"},
-               "resource_indicators_supported": true,
-               "mcp_server_version":        "1.0",
-               
-               // Dual flow support + service-to-service
-               "claude_code_flow_supported": true,
-               "mcp_remote_flow_supported": true,
-               "service_to_service_supported": true,
-               "token_auth_methods_supported": []string{"Bearer"},
-               "use_case": "backward_compatibility_and_service_to_service",
-           }
-           
-           if err := json.NewEncoder(w).Encode(metadata); err != nil {
-               http.Error(w, "Failed to encode response", http.StatusInternalServerError)
-               return
-           }
+       if r.Method != "GET" {
+           w.WriteHeader(http.StatusMethodNotAllowed)
+           _, _ = fmt.Fprintf(w, `{"error":"Method not allowed"}`)
+           return
        }
+       
+       // Return OAuth metadata based on configuration
+       if !s.config.OAuthEnabled {
+           w.WriteHeader(http.StatusOK)
+           _, _ = fmt.Fprintf(w, `{
+               "oauth_enabled": false,
+               "authentication_methods": ["none"],
+               "mcp_version": "1.0.0"
+           }`)
+           return
+       }
+       
+       // OAuth enabled - return configuration metadata
+       w.WriteHeader(http.StatusOK)
+       _, _ = fmt.Fprintf(w, `{
+           "oauth_enabled": true,
+           "authentication_methods": ["bearer_token"],
+           "token_types": ["JWT"],
+           "token_validation": "server_side",
+           "supported_flows": ["claude_code", "mcp_remote"],
+           "mcp_version": "1.0.0",
+           "server_version": "%s"
+       }`, s.version)
    }
    
    func fetchProviderMetadata(ctx context.Context, issuer string) (map[string]interface{}, error) {
