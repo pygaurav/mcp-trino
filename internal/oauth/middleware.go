@@ -1,11 +1,11 @@
-package mcp
+package oauth
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -23,23 +23,23 @@ const (
 	userContextKey contextKey = "user"
 )
 
-// JWT secret caching
-var (
-	jwtSecret     string
-	jwtSecretOnce sync.Once
-)
-
-// getJWTSecret retrieves and caches the JWT secret from environment
-func getJWTSecret() (string, error) {
-	jwtSecretOnce.Do(func() {
-		jwtSecret = os.Getenv("JWT_SECRET")
-	})
-	
-	if jwtSecret == "" {
-		return "", fmt.Errorf("JWT_SECRET environment variable is required")
-	}
-	return jwtSecret, nil
+// TokenCache stores validated tokens to avoid re-validation
+type TokenCache struct {
+	mu    sync.RWMutex
+	cache map[string]*CachedToken
 }
+
+// CachedToken represents a cached token validation result
+type CachedToken struct {
+	User      *User
+	ExpiresAt time.Time
+}
+
+// Global token cache
+var tokenCache = &TokenCache{
+	cache: make(map[string]*CachedToken),
+}
+
 
 // WithOAuthToken adds an OAuth token to the context
 func WithOAuthToken(ctx context.Context, token string) context.Context {
@@ -52,10 +52,41 @@ func GetOAuthToken(ctx context.Context) (string, bool) {
 	return token, ok
 }
 
-// authenticateRequest is deprecated - authentication is now handled by provider-based middleware
-func authenticateRequest(ctx context.Context, operation string) (context.Context, error) {
-	return ctx, fmt.Errorf("deprecated authentication function called - use provider-based validation")
+// getCachedToken retrieves a cached token validation result
+func (tc *TokenCache) getCachedToken(tokenHash string) (*CachedToken, bool) {
+	tc.mu.RLock()
+	defer tc.mu.RUnlock()
+	
+	cached, exists := tc.cache[tokenHash]
+	if !exists {
+		return nil, false
+	}
+	
+	// Check if token is expired
+	if time.Now().After(cached.ExpiresAt) {
+		// Remove expired token
+		tc.mu.RUnlock()
+		tc.mu.Lock()
+		delete(tc.cache, tokenHash)
+		tc.mu.Unlock()
+		tc.mu.RLock()
+		return nil, false
+	}
+	
+	return cached, true
 }
+
+// setCachedToken stores a token validation result
+func (tc *TokenCache) setCachedToken(tokenHash string, user *User, expiresAt time.Time) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	
+	tc.cache[tokenHash] = &CachedToken{
+		User:      user,
+		ExpiresAt: expiresAt,
+	}
+}
+
 
 // OAuthMiddleware creates an authentication middleware for MCP tools
 func OAuthMiddleware(validator TokenValidator, enabled bool) func(server.ToolHandlerFunc) server.ToolHandlerFunc {
@@ -74,12 +105,22 @@ func OAuthMiddleware(validator TokenValidator, enabled bool) func(server.ToolHan
 				return nil, fmt.Errorf("authentication required: missing OAuth token")
 			}
 
+			// Create token hash for caching
+			tokenHash := fmt.Sprintf("%x", sha256.Sum256([]byte(tokenString)))
+			
+			// Check cache first
+			if cached, exists := tokenCache.getCachedToken(tokenHash); exists {
+				log.Printf("OAuth: Using cached authentication for tool: %s (user: %s)", req.Params.Name, cached.User.Username)
+				ctx = context.WithValue(ctx, userContextKey, cached.User)
+				return next(ctx, req)
+			}
+
 			// Log token for debugging (first 50 chars)
 			tokenPreview := tokenString
 			if len(tokenString) > 50 {
 				tokenPreview = tokenString[:50] + "..."
 			}
-			log.Printf("OAuth: Received token for tool %s: %s", req.Params.Name, tokenPreview)
+			log.Printf("OAuth: Validating token for tool %s: %s", req.Params.Name, tokenPreview)
 
 			// Validate token using configured provider
 			user, err := validator.ValidateToken(tokenString)
@@ -88,9 +129,13 @@ func OAuthMiddleware(validator TokenValidator, enabled bool) func(server.ToolHan
 				return nil, fmt.Errorf("authentication failed: %w", err)
 			}
 
+			// Cache the validation result (expire in 5 minutes)
+			expiresAt := time.Now().Add(5 * time.Minute)
+			tokenCache.setCachedToken(tokenHash, user, expiresAt)
+
 			// Add user to context for downstream handlers
 			ctx = context.WithValue(ctx, userContextKey, user)
-			log.Printf("OAuth: Authenticated user %s for tool: %s", user.Username, req.Params.Name)
+			log.Printf("OAuth: Authenticated user %s for tool: %s (cached for 5 minutes)", user.Username, req.Params.Name)
 
 			return next(ctx, req)
 		}
@@ -200,7 +245,7 @@ func CreateRequestAuthHook(validator TokenValidator) func(context.Context, inter
 		}
 
 		// Add user to context for downstream handlers
-		ctx = context.WithValue(ctx, userContextKey, user)
+		_ = context.WithValue(ctx, userContextKey, user)
 		log.Printf("OAuth: Authenticated user %s for request ID: %v", user.Username, id)
 
 		return nil // Success

@@ -1,4 +1,4 @@
-package mcp
+package oauth
 
 import (
 	"encoding/json"
@@ -22,7 +22,7 @@ func (h *OAuth2Handler) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 	// Return OAuth metadata based on configuration
 	if !h.config.Enabled {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintf(w, `{
+		_, _ = fmt.Fprintf(w, `{
 			"oauth_enabled": false,
 			"authentication_methods": ["none"],
 			"mcp_version": "1.0.0"

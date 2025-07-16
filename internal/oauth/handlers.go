@@ -1,4 +1,4 @@
-package mcp
+package oauth
 
 import (
 	"context"
@@ -309,7 +309,7 @@ func (h *OAuth2Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 func (h *OAuth2Handler) showSuccessPage(w http.ResponseWriter, code, state string) {
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `
+	_, _ = fmt.Fprintf(w, `
 		<html>
 		<head><title>OAuth2 Success</title></head>
 		<body>
@@ -346,7 +346,7 @@ func (p *pkceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		req.Body.Close()
+		_ = req.Body.Close()
 		
 		// Parse the form data
 		values, err := url.ParseQuery(string(body))
