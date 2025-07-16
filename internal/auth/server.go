@@ -34,6 +34,16 @@ func SetupOAuthServer(cfg *config.TrinoConfig, mcpServer *server.MCPServer) erro
 	return nil
 }
 
+// CreateOAuth2Handler creates a new OAuth2 handler for HTTP endpoints
+func CreateOAuth2Handler(cfg *config.TrinoConfig, version string) *OAuth2Handler {
+	if !cfg.OAuthEnabled {
+		return nil
+	}
+	
+	oauth2Config := NewOAuth2ConfigFromTrinoConfig(cfg, version)
+	return NewOAuth2Handler(oauth2Config)
+}
+
 // CreateValidator creates the appropriate token validator based on configuration (exported)
 func CreateValidator(cfg *config.TrinoConfig) (TokenValidator, error) {
 	switch cfg.OAuthProvider {
