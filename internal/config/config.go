@@ -33,6 +33,7 @@ type TrinoConfig struct {
 	OIDCAudience      string // OIDC audience
 	OIDCClientID      string // OIDC client ID
 	OIDCClientSecret  string // OIDC client secret
+	OAuthRedirectURI  string // Fixed OAuth redirect URI (overrides dynamic callback)
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
@@ -51,6 +52,7 @@ func NewTrinoConfig() *TrinoConfig {
 	oidcAudience := getEnv("OIDC_AUDIENCE", "")
 	oidcClientID := getEnv("OIDC_CLIENT_ID", "")
 	oidcClientSecret := getEnv("OIDC_CLIENT_SECRET", "")
+	oauthRedirectURI := getEnv("OAUTH_REDIRECT_URI", "")
 
 	// Parse query timeout from environment variable
 	const defaultTimeout = 30
@@ -88,6 +90,9 @@ func NewTrinoConfig() *TrinoConfig {
 		if oauthProvider != "hmac" && oidcIssuer == "" {
 			log.Printf("WARNING: OIDC_ISSUER not set for %s provider. OAuth authentication may fail.", oauthProvider)
 		}
+		if oauthRedirectURI != "" {
+			log.Printf("INFO: Fixed OAuth redirect URI configured: %s", oauthRedirectURI)
+		}
 	}
 
 	return &TrinoConfig{
@@ -109,6 +114,7 @@ func NewTrinoConfig() *TrinoConfig {
 		OIDCAudience:      oidcAudience,
 		OIDCClientID:      oidcClientID,
 		OIDCClientSecret:  oidcClientSecret,
+		OAuthRedirectURI:  oauthRedirectURI,
 	}
 }
 

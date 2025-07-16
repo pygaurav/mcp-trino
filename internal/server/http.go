@@ -96,6 +96,16 @@ func (s *HTTPServer) Start(port string) error {
 		mux.HandleFunc("/oauth/register", s.handleOAuthRegister)
 		// Add token endpoint to proxy to Okta
 		mux.HandleFunc("/oauth/token", s.handleOAuthToken)
+		
+		// Add /callback redirect for Claude Code compatibility
+		mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+			// Preserve all query parameters when redirecting
+			redirectURL := "/oauth/callback"
+			if r.URL.RawQuery != "" {
+				redirectURL += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, redirectURL, http.StatusFound)
+		})
 	}
 	
 	// Shared MCP handler function for both endpoints
@@ -130,6 +140,10 @@ func (s *HTTPServer) Start(port string) error {
 			log.Printf("  - Legacy endpoint: https://localhost%s/sse (backward compatibility)", addr)
 			log.Printf("  - OAuth metadata: https://localhost%s/.well-known/oauth-authorization-server", addr)
 			log.Printf("  - OAuth metadata (legacy): https://localhost%s/.well-known/oauth-metadata", addr)
+			if s.config.OAuthEnabled {
+				log.Printf("  - OAuth callback: https://localhost%s/oauth/callback", addr)
+				log.Printf("  - OAuth callback (Claude Code): https://localhost%s/callback (redirects to /oauth/callback)", addr)
+			}
 			
 			if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
@@ -143,6 +157,10 @@ func (s *HTTPServer) Start(port string) error {
 			log.Printf("  - Legacy endpoint: http://localhost%s/sse (backward compatibility)", addr)
 			log.Printf("  - OAuth metadata: http://localhost%s/.well-known/oauth-authorization-server", addr)
 			log.Printf("  - OAuth metadata (legacy): http://localhost%s/.well-known/oauth-metadata", addr)
+			if s.config.OAuthEnabled {
+				log.Printf("  - OAuth callback: http://localhost%s/oauth/callback", addr)
+				log.Printf("  - OAuth callback (Claude Code): http://localhost%s/callback (redirects to /oauth/callback)", addr)
+			}
 			
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTP server error: %v", err)
@@ -266,6 +284,16 @@ func (s *HTTPServer) handleOAuthMetadata(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	
+	// Use MCP server host/port, not Trino
+	mcpHost := getEnv("MCP_HOST", "localhost")
+	mcpPort := getEnv("MCP_PORT", "8080")
+	
+	// Determine scheme based on HTTPS configuration
+	scheme := "http"
+	if getEnv("HTTPS_CERT_FILE", "") != "" && getEnv("HTTPS_KEY_FILE", "") != "" {
+		scheme = "https"
+	}
+	
 	// Create provider-specific metadata
 	metadata := map[string]interface{}{
 		"oauth_enabled": true,
@@ -276,7 +304,7 @@ func (s *HTTPServer) handleOAuthMetadata(w http.ResponseWriter, r *http.Request)
 		"mcp_version": "1.0.0",
 		"server_version": s.version,
 		"provider": s.config.OAuthProvider,
-		"authorization_endpoint": fmt.Sprintf("https://%s:%d/oauth/authorize", s.config.Host, s.config.Port),
+		"authorization_endpoint": fmt.Sprintf("%s://%s:%s/oauth/authorize", scheme, mcpHost, mcpPort),
 		"token_endpoint": s.config.OIDCIssuer + "/oauth2/v1/token",
 	}
 	
@@ -346,16 +374,35 @@ func (s *HTTPServer) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request
 	state := query.Get("state")
 	clientID := query.Get("client_id")
 	
+	// Safe code challenge preview for logging
+	challengePreview := codeChallenge
+	if len(codeChallenge) > 10 {
+		challengePreview = codeChallenge[:10] + "..."
+	}
 	log.Printf("OAuth: Authorization request - client_id: %s, redirect_uri: %s, code_challenge: %s", 
-		clientID, redirectURI, codeChallenge[:10]+"...")
+		clientID, redirectURI, challengePreview)
 
 	// Build Okta authorization URL with all parameters
 	oktaParams := make(map[string]string)
 	oktaParams["client_id"] = s.config.OIDCClientID
 	oktaParams["response_type"] = "code"
 	oktaParams["scope"] = "openid profile email"
-	oktaParams["redirect_uri"] = redirectURI // Use mcp-remote's callback URL
-	oktaParams["state"] = state
+	
+	// Use fixed redirect URI if configured, otherwise use client's redirect URI
+	if s.config.OAuthRedirectURI != "" {
+		oktaParams["redirect_uri"] = s.config.OAuthRedirectURI
+		log.Printf("OAuth: Using fixed redirect URI: %s (overriding client's %s)", s.config.OAuthRedirectURI, redirectURI)
+		
+		// Store the original client redirect URI in the state for later proxy callback
+		// We'll encode it as: originalState|originalRedirectURI
+		originalState := state
+		encodedState := fmt.Sprintf("%s|%s", originalState, redirectURI)
+		oktaParams["state"] = encodedState
+		log.Printf("OAuth: Encoded state for proxy callback: %s", encodedState)
+	} else {
+		oktaParams["redirect_uri"] = redirectURI // Use mcp-remote's callback URL
+		oktaParams["state"] = state
+	}
 	
 	// Include PKCE parameters
 	if codeChallenge != "" {
@@ -466,8 +513,13 @@ func (s *HTTPServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	state := r.URL.Query().Get("state")
 	errorParam := r.URL.Query().Get("error")
 
+	// Safe code preview for logging
+	codePreview := code
+	if len(code) > 10 {
+		codePreview = code[:10] + "..."
+	}
 	log.Printf("OAuth: Callback received - code: %s, state: %s, error: %s", 
-		code[:10]+"...", state, errorParam)
+		codePreview, state, errorParam)
 
 	if errorParam != "" {
 		errorDesc := r.URL.Query().Get("error_description")
@@ -483,10 +535,27 @@ func (s *HTTPServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 	}
 
 	// TODO: Validate state parameter for CSRF protection
-	// TODO: Exchange code for tokens
-	// TODO: Store tokens in session
-
-	// For now, return success page
+	
+	// If we have a fixed redirect URI configured, decode the state and proxy back to Claude Code
+	if s.config.OAuthRedirectURI != "" && strings.Contains(state, "|") {
+		// Decode the state: originalState|originalRedirectURI
+		parts := strings.SplitN(state, "|", 2)
+		if len(parts) == 2 {
+			originalState := parts[0]
+			originalRedirectURI := parts[1]
+			
+			log.Printf("OAuth: Proxying callback to original client: %s", originalRedirectURI)
+			
+			// Build the proxy callback URL
+			proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
+			
+			// Redirect to the original client (Claude Code)
+			http.Redirect(w, r, proxyURL, http.StatusFound)
+			return
+		}
+	}
+	
+	// Fallback: return success page with code for debugging
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprintf(w, `
@@ -495,10 +564,12 @@ func (s *HTTPServer) handleOAuthCallback(w http.ResponseWriter, r *http.Request)
 		<body>
 			<h2>Authentication Successful!</h2>
 			<p>You have been successfully authenticated with Okta.</p>
+			<p>Authorization code: %s</p>
+			<p>State: %s</p>
 			<p>You can now close this window and return to your application.</p>
 		</body>
 		</html>
-	`)
+	`, code, state)
 }
 
 // handleSignals handles graceful shutdown signals
@@ -582,10 +653,17 @@ func (s *HTTPServer) handleOAuthRegister(w http.ResponseWriter, r *http.Request)
 		"client_id_issued_at":      time.Now().Unix(),
 		"grant_types":              []string{"authorization_code", "refresh_token"},
 		"response_types":           []string{"code"},
-		"redirect_uris":            regRequest["redirect_uris"], // Keep mcp-remote's HTTP callbacks
 		"token_endpoint_auth_method": "none",
 		"application_type":         "native",
 		"client_name":              regRequest["client_name"],
+	}
+	
+	// Use fixed redirect URI if configured, otherwise use client's redirect URIs
+	if s.config.OAuthRedirectURI != "" {
+		response["redirect_uris"] = []string{s.config.OAuthRedirectURI}
+		log.Printf("OAuth: Registration response using fixed redirect URI: %s", s.config.OAuthRedirectURI)
+	} else {
+		response["redirect_uris"] = regRequest["redirect_uris"] // Keep mcp-remote's HTTP callbacks
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -658,7 +736,14 @@ func (s *HTTPServer) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
 	formData := url.Values{}
 	formData.Set("grant_type", "authorization_code")
 	formData.Set("code", code)
-	formData.Set("redirect_uri", redirectURI)
+	
+	// Use fixed redirect URI if configured, otherwise use client's redirect URI
+	if s.config.OAuthRedirectURI != "" {
+		formData.Set("redirect_uri", s.config.OAuthRedirectURI)
+		log.Printf("OAuth: Token exchange using fixed redirect URI: %s", s.config.OAuthRedirectURI)
+	} else {
+		formData.Set("redirect_uri", redirectURI)
+	}
 	formData.Set("client_id", s.config.OIDCClientID) // Use our configured Okta client ID
 	if codeVerifier != "" {
 		formData.Set("code_verifier", codeVerifier)
