@@ -391,11 +391,11 @@ export MCP_PORT=8080
 
 **Step 2: Configure Claude Code with Remote MCP Server**
 ```bash
-# Claude Code will handle OAuth flow automatically
+# Claude Code handles OAuth flow
 claude mcp add https://your-mcp-server.com:8080
 ```
 
-**Alternative: Option 2: OAuth 2.1 with mcp-remote (For Claude Desktop)**
+### Option 2: OAuth 2.1 with mcp-remote (For Claude Desktop)**
 
 **Step 1: Deploy MCP Server (same as above)**
 
@@ -526,51 +526,571 @@ The sequence diagrams above illustrate the complete OAuth authentication flow. H
 - Scenarios requiring custom authentication flows beyond OAuth 2.1
 - Use cases requiring direct MCP server access without OAuth (use basic auth mode instead)
 
-## Implementation Order
+## Next Steps: Okta Integration Strategy
 
-1. **Add JWT Dependencies**: Add Go JWT library to go.mod
+### Current Implementation Status
+
+The mcp-trino server currently has a **complete OAuth implementation using fixed JWT secrets** (HMAC-SHA256). To support real OAuth providers like Okta, we need to implement **OAuth Provider Abstraction** with OIDC discovery and JWKS validation.
+
+**Important**: The implementation must support **three OAuth modes** simultaneously:
+
+1. **Fixed JWT (HMAC-SHA256)**: 
+   - Current implementation for backward compatibility
+   - Ideal for service-to-service authentication
+   - Development/testing environments
+   - Internal systems that don't require full OAuth providers
+
+2. **Claude Code Flow**: Native OAuth client with automatic token refresh
+3. **mcp-remote Flow**: Token passed via HTTP headers from Claude Desktop
+
+All three modes converge on the same server-side token validation logic through the provider abstraction layer.
+
+### Implementation Roadmap for Okta Integration
+
+#### Phase 1: OAuth Provider Abstraction (Next Priority)
+
+1. **Add Required Dependencies**:
    ```bash
+   # OIDC library (CoreOS maintained)
+   go get github.com/coreos/go-oidc/v3/oidc@latest
+   
+   # Go OAuth2 library (golang.org extended packages)
+   go get golang.org/x/oauth2@latest
+   
+   # JWT library for HMAC validation
    go get github.com/golang-jwt/jwt/v5@latest
+   
    go mod tidy
    ```
-2. **Create JWT Validator**: Implement JWT Bearer token validation using `github.com/golang-jwt/jwt/v5`
-3. **Create OAuth Middleware**: HTTP middleware for Bearer token extraction and validation
-4. **Update Configuration**: Add OAuth enable/disable flag to configuration
-5. **Add Metadata Endpoint**: Serve OAuth metadata for MCP compliance (planned)
-6. **Update Main Application**: Integrate OAuth middleware with HTTP transport
-7. **Environment Configuration**: Simple OAuth enable flag configuration
-8. **HTTPS Enforcement**: Add HTTPS-only mode for OAuth endpoints
-9. **Testing**: Test with Claude Code native OAuth and mcp-remote for compatibility
 
-**Key Implementation Details:**
-- **Custom JWT Validation** - Uses `github.com/golang-jwt/jwt/v5` for Bearer token validation
-- **Client-Side OAuth Handled by Claude Code/mcp-remote** - No server-side OAuth flows needed
-- **JWT Token Validation** - RSA signature validation with issuer and audience checks
-- **Bearer Token Middleware** - Custom HTTP middleware for token extraction and validation
-- **OAuth Authorization Server Metadata** - Planned feature for MCP compliance
-- **No Trino OAuth setup** - MCP server acts as authorization gateway
+2. **Create Provider Interface** (`internal/auth/provider.go`):
+   ```go
+   type TokenValidator interface {
+       ValidateToken(token string) (*User, error)
+       Initialize(config *OAuthConfig) error
+   }
 
-**Simplified Environment Variables:**
+   type HMACValidator struct {        // Current implementation - PRESERVED for backward compatibility
+       secret string
+   }
+
+   type OIDCValidator struct {        // New for Okta/Google/Azure
+       verifier *oidc.IDTokenVerifier
+       provider *oidc.Provider
+   }
+   ```
+
+3. **Enhanced Configuration** (`internal/config/config.go`):
+   ```go
+   import (
+       "fmt"
+       "os"
+       "strconv"
+       "strings"
+       "time"
+   )
+   
+   type OAuthConfig struct {
+       Enabled   bool   `json:"enabled"`
+       Provider  string `json:"provider"`  // "hmac", "okta", "google"
+       
+       // HMAC provider (backward compatibility & service-to-service)
+       JWTSecret string `json:"jwt_secret,omitempty"`
+       
+       // OIDC providers (production)
+       Issuer       string `json:"issuer,omitempty"`
+       Audience     string `json:"audience,omitempty"`
+       ClientID     string `json:"client_id,omitempty"`
+       ClientSecret string `json:"client_secret,omitempty"`
+       
+       // Standard library timeout configurations
+       HTTPTimeout     time.Duration `json:"http_timeout"`
+       ContextTimeout  time.Duration `json:"context_timeout"`
+   }
+   
+   // Standard library configuration loading patterns
+   func NewOAuthConfig() (*OAuthConfig, error) {
+       config := &OAuthConfig{
+           HTTPTimeout:    30 * time.Second, // Standard library time.Duration
+           ContextTimeout: 10 * time.Second,
+       }
+       
+       // Use standard library os package for environment variables
+       if enabled, _ := strconv.ParseBool(os.Getenv("TRINO_OAUTH_ENABLED")); enabled {
+           config.Enabled = true
+           
+           provider := strings.ToLower(os.Getenv("OAUTH_PROVIDER"))
+           if provider == "" {
+               provider = "hmac" // Default to HMAC for backward compatibility
+           }
+           config.Provider = provider
+           
+           switch provider {
+           case "hmac":
+               config.JWTSecret = os.Getenv("JWT_SECRET")
+               if config.JWTSecret == "" {
+                   return nil, fmt.Errorf("JWT_SECRET required for HMAC provider")
+               }
+               // HMAC provider: ideal for service-to-service auth and backward compatibility
+               
+           case "okta":
+               config.Issuer = os.Getenv("OKTA_ISSUER")
+               config.Audience = os.Getenv("OKTA_AUDIENCE")
+               config.ClientID = os.Getenv("OKTA_CLIENT_ID")
+               config.ClientSecret = os.Getenv("OKTA_CLIENT_SECRET")
+               
+           case "google":
+               config.Issuer = "https://accounts.google.com"
+               config.Audience = os.Getenv("GOOGLE_AUDIENCE")
+               config.ClientID = os.Getenv("GOOGLE_CLIENT_ID")
+               
+           default:
+               return nil, fmt.Errorf("unsupported OAuth provider: %s", provider)
+           }
+           
+           // Validate required fields using standard library
+           if err := config.Validate(); err != nil {
+               return nil, fmt.Errorf("OAuth configuration validation failed: %w", err)
+           }
+       }
+       
+       return config, nil
+   }
+   
+   func (c *OAuthConfig) Validate() error {
+       if !c.Enabled {
+           return nil
+       }
+       
+       switch c.Provider {
+       case "hmac":
+           if c.JWTSecret == "" {
+               return fmt.Errorf("JWT_SECRET required for HMAC provider")
+           }
+       case "okta", "google", "azure":
+           if c.Issuer == "" {
+               return fmt.Errorf("issuer required for OIDC provider")
+           }
+           if c.Audience == "" {
+               return fmt.Errorf("audience required for OIDC provider")
+           }
+       }
+       
+       return nil
+   }
+   ```
+
+4. **Environment Variables**:
+   ```bash
+   # OAuth Provider Selection
+   OAUTH_PROVIDER=okta                    # "hmac", "okta", "google", "azure"
+
+   # HMAC Provider (backward compatibility & service-to-service)
+   JWT_SECRET=your-secret-key
+
+   # Okta Provider
+   OKTA_ISSUER=https://your-domain.okta.com
+   OKTA_AUDIENCE=api://mcp-trino
+   OKTA_CLIENT_ID=your-client-id
+   OKTA_CLIENT_SECRET=your-client-secret
+
+   # Google Provider
+   GOOGLE_ISSUER=https://accounts.google.com
+   GOOGLE_AUDIENCE=your-client-id.apps.googleusercontent.com
+   GOOGLE_CLIENT_ID=your-client-id
+
+   # Azure AD Provider
+   AZURE_ISSUER=https://sts.windows.net/your-tenant-id/
+   AZURE_AUDIENCE=api://your-app-id
+   AZURE_CLIENT_ID=your-client-id
+   ```
+
+#### Phase 2: Okta OIDC Implementation
+
+5. **OIDC Discovery and JWKS Validation** (`internal/auth/oidc.go`) - **Standard Library Focused**:
+   ```go
+   import (
+       "context"
+       "crypto/tls"
+       "fmt"
+       "net/http"
+       "time"
+       
+       "github.com/coreos/go-oidc/v3/oidc"
+   )
+
+   func (v *OIDCValidator) Initialize(config *OAuthConfig) error {
+       // Use standard library context with timeout
+       ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+       defer cancel()
+       
+       // Configure HTTP client with appropriate timeouts and TLS settings
+       httpClient := &http.Client{
+           Timeout: 30 * time.Second,
+           Transport: &http.Transport{
+               TLSClientConfig: &tls.Config{
+                   InsecureSkipVerify: false, // Verify TLS certificates
+                   MinVersion:         tls.VersionTLS12,
+               },
+               IdleConnTimeout:     90 * time.Second,
+               TLSHandshakeTimeout: 10 * time.Second,
+               MaxIdleConns:        100,
+               MaxIdleConnsPerHost: 10,
+           },
+       }
+       
+       // Create OIDC provider with custom HTTP client
+       provider, err := oidc.NewProvider(
+           oidc.ClientContext(ctx, httpClient), 
+           config.Issuer,
+       )
+       if err != nil {
+           return fmt.Errorf("failed to initialize OIDC provider: %w", err)
+       }
+       
+       // Configure token verifier with required validation settings
+       verifier := provider.Verifier(&oidc.Config{
+           ClientID:             config.Audience,
+           SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256},
+           SkipClientIDCheck:    false, // Verify audience
+           SkipExpiryCheck:      false, // Verify expiration
+           SkipIssuerCheck:      false, // Verify issuer
+       })
+       
+       v.provider = provider
+       v.verifier = verifier
+       return nil
+   }
+   
+   func (v *OIDCValidator) ValidateToken(tokenString string) (*User, error) {
+       // Use standard library context with timeout
+       ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+       defer cancel()
+       
+       // go-oidc handles RSA signature validation, JWKS fetching, and key rotation
+       idToken, err := v.verifier.Verify(ctx, tokenString)
+       if err != nil {
+           return nil, fmt.Errorf("token verification failed: %w", err)
+       }
+       
+       // Extract claims from verified token
+       var claims struct {
+           Subject           string `json:"sub"`
+           PreferredUsername string `json:"preferred_username"`
+           Email             string `json:"email"`
+           EmailVerified     bool   `json:"email_verified,omitempty"`
+           Name              string `json:"name,omitempty"`
+           // Standard OIDC claims are validated by go-oidc:
+           // - iss (issuer)
+           // - aud (audience) 
+           // - exp (expiration)
+           // - iat (issued at)
+           // - nbf (not before)
+       }
+       
+       if err := idToken.Claims(&claims); err != nil {
+           return nil, fmt.Errorf("failed to extract claims: %w", err)
+       }
+       
+       return &User{
+           Subject:  claims.Subject,
+           Username: claims.PreferredUsername,
+           Email:    claims.Email,
+       }, nil
+   }
+   ```
+
+6. **Implementation Benefits**:
+   - **JWKS Key Fetching**: `go-oidc` uses standard `net/http` for key retrieval
+   - **Signature Validation**: Uses standard `crypto/rsa`, `crypto/ecdsa`, and `crypto/x509` packages
+   - **TLS Certificate Validation**: Standard `crypto/tls` with configurable minimum version
+   - **HTTP Client Configuration**: Standard `net/http.Client` with connection pooling
+   - **Context-Based Timeouts**: Standard `context` package for request cancellation
+   - **Key Rotation**: `go-oidc` handles JWKS caching and refresh
+   - **Claims Validation**: RFC 7519 JWT claims validation
+   - **Algorithm Support**: Common signing algorithms (RS256, RS384, RS512, ES256, ES384, ES512)
+
+#### Phase 3: Enhanced Metadata Endpoint
+
+7. **OAuth Metadata Endpoint** (`cmd/main.go`):
+   ```go
+   import (
+       "context"
+       "encoding/json"
+       "fmt"
+       "net/http"
+       "time"
+   )
+
+   func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, config *OAuthConfig) {
+       // Use standard library context with timeout
+       ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+       defer cancel()
+       
+       // Standard HTTP headers using net/http
+       w.Header().Set("Content-Type", "application/json")
+       w.Header().Set("Cache-Control", "public, max-age=3600") // Cache for 1 hour
+       
+       switch config.Provider {
+       case "okta", "google", "azure":
+           // Proxy OAuth provider's metadata using standard library
+           metadata, err := fetchProviderMetadata(ctx, config.Issuer)
+           if err != nil {
+               http.Error(w, "Failed to fetch provider metadata", http.StatusInternalServerError)
+               return
+           }
+           
+           // Add MCP-specific extensions for both Claude Code and mcp-remote
+           metadata["resource_indicators_supported"] = true
+           metadata["mcp_server_version"] = "1.0"
+           
+           // Claude Code native OAuth flow support
+           metadata["claude_code_flow_supported"] = true
+           
+           // mcp-remote flow support (token via HTTP headers)
+           metadata["mcp_remote_flow_supported"] = true
+           metadata["token_auth_methods_supported"] = []string{"Bearer"}
+           
+           // Use standard library JSON encoder
+           if err := json.NewEncoder(w).Encode(metadata); err != nil {
+               http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+               return
+           }
+           
+       case "hmac":
+           // HMAC metadata for backward compatibility and service-to-service
+           metadata := map[string]interface{}{
+               "issuer":                    "mcp-trino-server",
+               "token_endpoint_auth_methods_supported": []string{"none"},
+               "response_types_supported":  []string{"code"},
+               "subject_types_supported":   []string{"public"},
+               "id_token_signing_alg_values_supported": []string{"HS256"},
+               "resource_indicators_supported": true,
+               "mcp_server_version":        "1.0",
+               
+               // Dual flow support + service-to-service
+               "claude_code_flow_supported": true,
+               "mcp_remote_flow_supported": true,
+               "service_to_service_supported": true,
+               "token_auth_methods_supported": []string{"Bearer"},
+               "use_case": "backward_compatibility_and_service_to_service",
+           }
+           
+           if err := json.NewEncoder(w).Encode(metadata); err != nil {
+               http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+               return
+           }
+       }
+   }
+   
+   func fetchProviderMetadata(ctx context.Context, issuer string) (map[string]interface{}, error) {
+       // Use standard library HTTP client with context
+       client := &http.Client{
+           Timeout: 10 * time.Second,
+       }
+       
+       req, err := http.NewRequestWithContext(ctx, "GET", 
+           issuer+"/.well-known/openid-configuration", nil)
+       if err != nil {
+           return nil, fmt.Errorf("failed to create request: %w", err)
+       }
+       
+       resp, err := client.Do(req)
+       if err != nil {
+           return nil, fmt.Errorf("failed to fetch metadata: %w", err)
+       }
+       defer resp.Body.Close()
+       
+       if resp.StatusCode != http.StatusOK {
+           return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+       }
+       
+       var metadata map[string]interface{}
+       if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+           return nil, fmt.Errorf("failed to decode metadata: %w", err)
+       }
+       
+       return metadata, nil
+   }
+   ```
+
+#### Phase 4: Testing and Validation
+
+8. **Testing Strategy**:
+   ```go
+   import (
+       "context"
+       "net/http"
+       "net/http/httptest"
+       "testing"
+       "time"
+   )
+   
+   func TestOIDCValidator(t *testing.T) {
+       // Mock OIDC endpoints using httptest
+       server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+           // Mock OIDC discovery endpoint
+           if r.URL.Path == "/.well-known/openid-configuration" {
+               w.Header().Set("Content-Type", "application/json")
+               w.Header().Set("Cache-Control", "public, max-age=3600")
+               mockConfig := map[string]interface{}{
+                   "issuer":                 server.URL,
+                   "jwks_uri":              server.URL + "/.well-known/jwks.json",
+                   "id_token_signing_alg_values_supported": []string{"RS256", "ES256"},
+               }
+               json.NewEncoder(w).Encode(mockConfig)
+           }
+           // Mock JWKS endpoint
+           if r.URL.Path == "/.well-known/jwks.json" {
+               w.Header().Set("Content-Type", "application/json")
+               w.Header().Set("Cache-Control", "public, max-age=3600")
+               // Return mock JWKS with test keys
+           }
+       }))
+       defer server.Close()
+       
+       // Test with context timeout
+       ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+       defer cancel()
+       
+       validator := &OIDCValidator{}
+       config := &OAuthConfig{
+           Provider: "okta",
+           Issuer:   server.URL,
+           Audience: "test-audience",
+       }
+       
+       // Test initialization
+       err := validator.Initialize(config)
+       if err != nil {
+           t.Fatalf("Failed to initialize validator: %v", err)
+       }
+       
+       // Verify initialization
+       if validator.provider == nil {
+           t.Fatal("Provider should be initialized")
+       }
+       if validator.verifier == nil {
+           t.Fatal("Verifier should be initialized")
+       }
+   }
+   ```
+   
+   **Testing Approach**:
+   - **Unit Tests**: Each provider type using standard `testing` package
+   - **HTTP Mocking**: `net/http/httptest` for OIDC endpoints
+   - **Context Testing**: Timeout and cancellation patterns
+   - **Integration Tests**: Real OAuth provider testing
+   - **Backward Compatibility**: Existing `JWT_SECRET` validation
+   - **Performance Tests**: Benchmarks for JWKS caching behavior
+   - **Race Detection**: `go test -race` for concurrency issues
+
+### Implementation Characteristics
+
+1. **Backward Compatibility**: Existing `JWT_SECRET` configurations remain functional
+2. **OIDC Support**: Implements standard OIDC/JWKS validation 
+3. **Multi-Provider Support**: Configurable for different OAuth providers (Okta, Google, Azure AD)
+4. **No Hardcoded Secrets**: Uses environment variables for configuration
+5. **MCP Compliance**: Implements OAuth 2.1 and MCP Authorization specification
+6. **Standard Library Usage**: Utilizes Go's built-in packages where possible
+7. **Established Libraries**: Uses well-maintained libraries (`go-oidc`, `golang.org/x/oauth2`)
+8. **Context Support**: Standard `context` patterns for timeout and cancellation
+9. **HTTP Configuration**: Standard `net/http` client with timeouts
+10. **Multiple Client Support**: Single server implementation supports Claude Code and mcp-remote
+11. **Unified Validation**: Same token validation logic across client types
+
+### Standard Library Integration
+
+**Crypto Operations**:
+- **RSA Validation**: `go-oidc` uses standard `crypto/rsa`
+- **X.509 Certificates**: Standard `crypto/x509` for certificate validation  
+- **TLS Security**: Standard `crypto/tls` for secure connections
+- **JWT Claims**: Standard `encoding/json` for claims parsing
+
+**HTTP Operations**:
+- **HTTP Client**: Standard `net/http.Client` with timeouts
+- **Request Context**: Standard `context` for cancellation and deadlines
+- **JSON Handling**: Standard `encoding/json` for JSON operations
+- **Error Responses**: Standard `http.Error` patterns
+
+**Concurrency and Performance**:
+- **Context Cancellation**: Standard timeout handling patterns
+- **HTTP Connection Pooling**: Built-in `http.Transport` features
+- **JWKS Caching**: `go-oidc` handles caching
+- **TLS Configuration**: Standard `crypto/tls` connection reuse
+
+### Environment Configuration Examples
+
+**Development/Testing and Service-to-Service (current approach):**
 ```bash
-# Enable OAuth Authentication
+OAUTH_PROVIDER=hmac
+JWT_SECRET=development-secret-key
 TRINO_OAUTH_ENABLED=true
-
-# JWT Secret (REQUIRED - no default fallback)
-JWT_SECRET=your-256-bit-secret-key
-
-# Trino Connection (unchanged)
-TRINO_HOST=trino.example.com
-TRINO_PORT=443
-TRINO_USER=service-account
-TRINO_PASSWORD=service-password
-
-# MCP Server Configuration
-MCP_TRANSPORT=http
-MCP_PORT=8080
-MCP_HTTPS=true
 ```
 
-This approach provides OAuth 2.1 authentication using **Go standard libraries** for server-side OAuth resource server functionality, while leveraging Claude Code/mcp-remote for client-side OAuth complexity.
+**Production with Okta:**
+```bash
+OAUTH_PROVIDER=okta
+OKTA_ISSUER=https://your-company.okta.com
+OKTA_AUDIENCE=api://mcp-trino-prod
+OKTA_CLIENT_ID=0oa1a2b3c4d5e6f7g8h9
+TRINO_OAUTH_ENABLED=true
+```
+
+**Production with Google:**
+```bash
+OAUTH_PROVIDER=google
+GOOGLE_ISSUER=https://accounts.google.com
+GOOGLE_AUDIENCE=123456789-abc.apps.googleusercontent.com
+GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
+TRINO_OAUTH_ENABLED=true
+```
+
+## Summary: Triple Mode Implementation Strategy
+
+This implementation strategy extends the current fixed JWT implementation to support OAuth providers while maintaining backward compatibility and supporting multiple client types.
+
+### Implementation Approach
+
+**1. Crypto Operations**:
+- Uses `go-oidc` library for RSA/JWKS operations via standard `crypto/rsa`
+- Standard `crypto/x509` for certificate validation
+- Standard `crypto/tls` for secure connections
+- Preserves existing JWT validation for HMAC-SHA256 tokens
+
+**2. HTTP Operations**:
+- Standard `net/http.Client` with timeout configurations
+- Standard `context` package for request cancellation and deadlines
+- Standard `encoding/json` for JSON encoding/decoding
+- Standard `net/http/httptest` for testing
+
+**3. OAuth Libraries**:
+- `github.com/coreos/go-oidc/v3/oidc` - OIDC library (CoreOS maintained)
+- `golang.org/x/oauth2` - Go OAuth2 implementation (golang.org extended packages)
+- `github.com/golang-jwt/jwt/v5` - JWT library for Go
+
+**4. Configuration Management**:
+- Standard `os` package for environment variables
+- Standard `strconv` and `strings` for type conversion
+- Standard `time.Duration` for timeout configuration
+- Standard error handling with `fmt.Errorf` and error wrapping
+
+**5. Architecture Characteristics**:
+- **Single Token Validation Logic**: Same server-side validation for all three modes
+- **Unified OAuth Metadata**: One endpoint serves all client types
+- **Multiple Client Support**: Works with Claude Code, mcp-remote, and service-to-service
+- **Backward Compatibility**: Existing JWT_SECRET implementations continue to work
+- **HMAC-SHA256 Support**: Maintained for service-to-service authentication
+
+**6. Standard Library Usage**:
+- Uses `go-oidc` for JWKS client functionality
+- Uses `go-oidc` for RSA validation via standard library
+- Uses standard `net/http` patterns for HTTP clients
+- Uses standard `encoding/json` for JSON handling
+- Uses standard `context` patterns for timeouts
+- Uses standard `crypto/tls` for TLS configuration
+
+This approach provides a migration path from the current JWT implementation to OAuth provider support while maintaining compatibility with existing deployments and supporting multiple authentication flows through a unified server implementation.
 
 ## Current Authentication Implementation
 
@@ -640,13 +1160,12 @@ Based on the current architecture, OAuth/JWT authentication status:
 
 The current codebase has **complete OAuth/JWT authentication implementation**. All major components are implemented including public metadata endpoint for MCP compliance and full HTTP server integration. Since mcp-go v0.33.0 provides client-side OAuth capabilities but no server-side authentication, we implement the necessary server-side OAuth resource server functionality.
 
-**Implementation Status: ✅ COMPLETE**
+**Implementation Status: ✅ FOUNDATION COMPLETE - Ready for Okta Integration**
 
-### Key Implementation Features:
+### Current Implementation Features (Fixed JWT):
 - **Public Metadata Endpoint**: `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration` accessible without authentication
 - **JWT Token Validation**: HMAC-SHA256 signature verification with proper claims validation
 - **Route Segregation**: Unauthenticated endpoints processed before authentication middleware
-- **Provider Discovery**: Automatic OAuth provider configuration discovery
 - **MCP Specification Compliance**: Full compliance with MCP June 2025 authorization specification
 - **Security Enhancements**: 
   - JWT secret caching with `sync.Once` pattern
@@ -654,3 +1173,10 @@ The current codebase has **complete OAuth/JWT authentication implementation**. A
   - Proper JWT signature verification (no ParseUnverified)
   - No insecure default fallbacks
   - Graceful HTTP server shutdown
+
+### Required for Okta Integration:
+- **OAuth Provider Abstraction**: Interface-based token validation
+- **OIDC Discovery**: Dynamic provider configuration from `.well-known/openid-configuration`
+- **JWKS Validation**: RSA key validation with automatic key rotation
+- **Multi-Provider Support**: Support for Okta, Google, Azure AD via environment variables
+- **Enhanced Metadata Endpoint**: Provider-specific OAuth metadata proxying
