@@ -567,7 +567,7 @@ All three modes converge on the same server-side token validation logic through 
    ```go
    type TokenValidator interface {
        ValidateToken(token string) (*User, error)
-       Initialize(config *OAuthConfig) error
+       Initialize(cfg *config.TrinoConfig) error
    }
 
    type HMACValidator struct {        // Current implementation - PRESERVED for backward compatibility
@@ -580,107 +580,107 @@ All three modes converge on the same server-side token validation logic through 
    }
    ```
 
-3. **Enhanced Configuration** (`internal/config/config.go`):
+3. **Update MCP Server Middleware** (`internal/auth/oauth.go`):
    ```go
    import (
+       "context"
        "fmt"
-       "os"
-       "strconv"
-       "strings"
-       "time"
+       "log"
+       
+       "github.com/mark3labs/mcp-go/mcp"
+       "github.com/mark3labs/mcp-go/server"
    )
-   
-   type OAuthConfig struct {
-       Enabled   bool   `json:"enabled"`
-       Provider  string `json:"provider"`  // "hmac", "okta", "google"
-       
-       // HMAC provider (backward compatibility & service-to-service)
-       JWTSecret string `json:"jwt_secret,omitempty"`
-       
-       // OIDC providers (production)
-       Issuer       string `json:"issuer,omitempty"`
-       Audience     string `json:"audience,omitempty"`
-       ClientID     string `json:"client_id,omitempty"`
-       ClientSecret string `json:"client_secret,omitempty"`
-       
-       // Standard library timeout configurations
-       HTTPTimeout     time.Duration `json:"http_timeout"`
-       ContextTimeout  time.Duration `json:"context_timeout"`
-   }
-   
-   // Standard library configuration loading patterns
-   func NewOAuthConfig() (*OAuthConfig, error) {
-       config := &OAuthConfig{
-           HTTPTimeout:    30 * time.Second, // Standard library time.Duration
-           ContextTimeout: 10 * time.Second,
-       }
-       
-       // Use standard library os package for environment variables
-       if enabled, _ := strconv.ParseBool(os.Getenv("TRINO_OAUTH_ENABLED")); enabled {
-           config.Enabled = true
-           
-           provider := strings.ToLower(os.Getenv("OAUTH_PROVIDER"))
-           if provider == "" {
-               provider = "hmac" // Default to HMAC for backward compatibility
-           }
-           config.Provider = provider
-           
-           switch provider {
-           case "hmac":
-               config.JWTSecret = os.Getenv("JWT_SECRET")
-               if config.JWTSecret == "" {
-                   return nil, fmt.Errorf("JWT_SECRET required for HMAC provider")
+
+   // OAuthMiddleware creates an authentication middleware for MCP tools
+   // This integrates with mcp-go server middleware system
+   func OAuthMiddleware(validator TokenValidator, enabled bool) func(server.ToolHandlerFunc) server.ToolHandlerFunc {
+       return func(next server.ToolHandlerFunc) server.ToolHandlerFunc {
+           return func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+               if !enabled {
+                   log.Printf("OAuth: Authentication disabled - allowing tool: %s", req.Params.Name)
+                   return next(ctx, req)
                }
-               // HMAC provider: ideal for service-to-service auth and backward compatibility
+
+               // Extract token from context (set by HTTP middleware)
+               token, ok := GetOAuthToken(ctx)
+               if !ok {
+                   return nil, fmt.Errorf("authentication required: missing OAuth token")
+               }
+
+               // Validate token using configured provider
+               user, err := validator.ValidateToken(token)
+               if err != nil {
+                   log.Printf("OAuth: Token validation failed for tool %s: %v", req.Params.Name, err)
+                   return nil, fmt.Errorf("authentication failed: %w", err)
+               }
+
+               // Add user to context for downstream handlers
+               ctx = context.WithValue(ctx, userContextKey, user)
+               log.Printf("OAuth: Authenticated user %s for tool: %s", user.Username, req.Params.Name)
                
-           case "okta":
-               config.Issuer = os.Getenv("OKTA_ISSUER")
-               config.Audience = os.Getenv("OKTA_AUDIENCE")
-               config.ClientID = os.Getenv("OKTA_CLIENT_ID")
-               config.ClientSecret = os.Getenv("OKTA_CLIENT_SECRET")
-               
-           case "google":
-               config.Issuer = "https://accounts.google.com"
-               config.Audience = os.Getenv("GOOGLE_AUDIENCE")
-               config.ClientID = os.Getenv("GOOGLE_CLIENT_ID")
-               
-           default:
-               return nil, fmt.Errorf("unsupported OAuth provider: %s", provider)
-           }
-           
-           // Validate required fields using standard library
-           if err := config.Validate(); err != nil {
-               return nil, fmt.Errorf("OAuth configuration validation failed: %w", err)
+               return next(ctx, req)
            }
        }
-       
-       return config, nil
-   }
-   
-   func (c *OAuthConfig) Validate() error {
-       if !c.Enabled {
-           return nil
-       }
-       
-       switch c.Provider {
-       case "hmac":
-           if c.JWTSecret == "" {
-               return fmt.Errorf("JWT_SECRET required for HMAC provider")
-           }
-       case "okta", "google", "azure":
-           if c.Issuer == "" {
-               return fmt.Errorf("issuer required for OIDC provider")
-           }
-           if c.Audience == "" {
-               return fmt.Errorf("audience required for OIDC provider")
-           }
-       }
-       
-       return nil
    }
    ```
 
-4. **Environment Variables**:
+4. **Enhanced Configuration** (`internal/config/config.go`):
+   ```go
+   // Update existing TrinoConfig to support OAuth providers
+   type TrinoConfig struct {
+       // ... existing fields ...
+       
+       // OAuth configuration
+       OAuthEnabled      bool   // Enable OAuth 2.1 authentication
+       OAuthProvider     string // OAuth provider: "hmac", "okta", "google", "azure"
+       JWTSecret         string // JWT signing secret for HMAC provider
+       
+       // OIDC provider configuration
+       OIDCIssuer        string // OIDC issuer URL
+       OIDCAudience      string // OIDC audience
+       OIDCClientID      string // OIDC client ID
+       OIDCClientSecret  string // OIDC client secret
+       
+       // HTTP transport configuration
+       Transport         string // "stdio" or "http"
+       HTTPPort          int    // HTTP port for mcp-remote
+   }
+   
+   // Update NewTrinoConfig to load OAuth provider configuration
+   func NewTrinoConfig() *TrinoConfig {
+       // ... existing configuration loading ...
+       
+       // OAuth configuration
+       oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
+       oauthProvider := strings.ToLower(getEnv("OAUTH_PROVIDER", "hmac"))
+       jwtSecret := getEnv("JWT_SECRET", "")
+       
+       // OIDC configuration
+       oidcIssuer := getEnv("OIDC_ISSUER", "")
+       oidcAudience := getEnv("OIDC_AUDIENCE", "")
+       oidcClientID := getEnv("OIDC_CLIENT_ID", "")
+       oidcClientSecret := getEnv("OIDC_CLIENT_SECRET", "")
+       
+       // Transport configuration
+       transport := getEnv("MCP_TRANSPORT", "stdio")
+       httpPort, _ := strconv.Atoi(getEnv("MCP_PORT", "8080"))
+       
+       return &TrinoConfig{
+           // ... existing fields ...
+           OAuthEnabled:     oauthEnabled,
+           OAuthProvider:    oauthProvider,
+           JWTSecret:        jwtSecret,
+           OIDCIssuer:       oidcIssuer,
+           OIDCAudience:     oidcAudience,
+           OIDCClientID:     oidcClientID,
+           OIDCClientSecret: oidcClientSecret,
+           Transport:        transport,
+           HTTPPort:         httpPort,
+       }
+   }
+   ```
+
+5. **Environment Variables**:
    ```bash
    # OAuth Provider Selection
    OAUTH_PROVIDER=okta                    # "hmac", "okta", "google", "azure"
@@ -688,26 +688,120 @@ All three modes converge on the same server-side token validation logic through 
    # HMAC Provider (backward compatibility & service-to-service)
    JWT_SECRET=your-secret-key
 
-   # Okta Provider
-   OKTA_ISSUER=https://your-domain.okta.com
-   OKTA_AUDIENCE=api://mcp-trino
-   OKTA_CLIENT_ID=your-client-id
-   OKTA_CLIENT_SECRET=your-client-secret
+   # OIDC Provider Configuration (works for all OIDC providers)
+   OIDC_ISSUER=https://your-domain.okta.com
+   OIDC_AUDIENCE=api://mcp-trino
+   OIDC_CLIENT_ID=your-client-id
+   OIDC_CLIENT_SECRET=your-client-secret
 
-   # Google Provider
-   GOOGLE_ISSUER=https://accounts.google.com
-   GOOGLE_AUDIENCE=your-client-id.apps.googleusercontent.com
-   GOOGLE_CLIENT_ID=your-client-id
-
-   # Azure AD Provider
-   AZURE_ISSUER=https://sts.windows.net/your-tenant-id/
-   AZURE_AUDIENCE=api://your-app-id
-   AZURE_CLIENT_ID=your-client-id
+   # Transport Configuration
+   MCP_TRANSPORT=http                     # "stdio" or "http"
+   MCP_PORT=8080                          # HTTP port for mcp-remote
    ```
 
-#### Phase 2: Okta OIDC Implementation
+#### Phase 2: MCP Server Integration
 
-5. **OIDC Discovery and JWKS Validation** (`internal/auth/oidc.go`) - **Standard Library Focused**:
+6. **OAuth Server Setup** (`internal/auth/server.go`):
+   ```go
+   import (
+       "context"
+       "fmt"
+       "log"
+       
+       "github.com/mark3labs/mcp-go/server"
+       
+       "your-module/internal/config"
+       "your-module/internal/handlers"
+   )
+
+   // SetupOAuthServer initializes OAuth validation and sets up MCP server with middleware
+   func SetupOAuthServer(cfg *config.TrinoConfig, s *server.MCPServer) error {
+       if !cfg.OAuthEnabled {
+           log.Println("OAuth authentication disabled")
+           return nil
+       }
+       
+       // Initialize OAuth provider based on configuration
+       validator, err := createValidator(cfg)
+       if err != nil {
+           return fmt.Errorf("failed to create OAuth validator: %w", err)
+       }
+       
+       if err := validator.Initialize(cfg); err != nil {
+           return fmt.Errorf("failed to initialize OAuth validator: %w", err)
+       }
+       
+       // Apply OAuth middleware to all tool handlers
+       applyOAuthMiddleware(s, validator, cfg.OAuthEnabled)
+       
+       // Set up HTTP context function for token extraction
+       if cfg.Transport == "http" {
+           s.SetHTTPContextFunc(CreateHTTPContextFunc())
+       }
+       
+       log.Printf("OAuth authentication enabled with provider: %s", cfg.OAuthProvider)
+       return nil
+   }
+
+   // createValidator creates the appropriate token validator based on configuration
+   func createValidator(cfg *config.TrinoConfig) (TokenValidator, error) {
+       switch cfg.OAuthProvider {
+       case "hmac":
+           return &HMACValidator{}, nil
+       case "okta", "google", "azure":
+           return &OIDCValidator{}, nil
+       default:
+           return &HMACValidator{}, nil // Default to HMAC
+       }
+   }
+
+   // applyOAuthMiddleware applies OAuth middleware to all tool handlers
+   func applyOAuthMiddleware(s *server.MCPServer, validator TokenValidator, enabled bool) {
+       middleware := OAuthMiddleware(validator, enabled)
+       
+       // Apply middleware to each tool handler
+       s.SetToolHandler("execute_query", middleware(handlers.ExecuteQueryHandler))
+       s.SetToolHandler("list_catalogs", middleware(handlers.ListCatalogsHandler))
+       s.SetToolHandler("list_schemas", middleware(handlers.ListSchemasHandler))
+       s.SetToolHandler("list_tables", middleware(handlers.ListTablesHandler))
+       s.SetToolHandler("get_table_schema", middleware(handlers.GetTableSchemaHandler))
+   }
+   ```
+
+7. **Simplified Main Function** (`cmd/main.go`):
+   ```go
+   import (
+       "context"
+       "log"
+       
+       "github.com/mark3labs/mcp-go/server"
+       
+       "your-module/internal/auth"
+       "your-module/internal/config"
+   )
+
+   func main() {
+       // Initialize configuration
+       cfg := config.NewTrinoConfig()
+       
+       // Create MCP server
+       s := server.NewMCPServer("trino", "1.0.0")
+       
+       // Setup OAuth (if enabled)
+       if err := auth.SetupOAuthServer(cfg, s); err != nil {
+           log.Fatalf("Failed to setup OAuth: %v", err)
+       }
+       
+       // Start server
+       if err := s.Serve(context.Background()); err != nil {
+           log.Fatalf("Server failed: %v", err)
+       }
+   }
+   ```
+
+#### Phase 3: Okta OIDC Implementation
+
+8. **OIDC Discovery and JWKS Validation** (`internal/auth/oidc.go`):
    ```go
    import (
        "context"
@@ -719,7 +813,7 @@ All three modes converge on the same server-side token validation logic through 
        "github.com/coreos/go-oidc/v3/oidc"
    )
 
-   func (v *OIDCValidator) Initialize(config *OAuthConfig) error {
+   func (v *OIDCValidator) Initialize(cfg *config.TrinoConfig) error {
        // Use standard library context with timeout
        ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
        defer cancel()
@@ -742,7 +836,7 @@ All three modes converge on the same server-side token validation logic through 
        // Create OIDC provider with custom HTTP client
        provider, err := oidc.NewProvider(
            oidc.ClientContext(ctx, httpClient), 
-           config.Issuer,
+           cfg.OIDCIssuer,
        )
        if err != nil {
            return fmt.Errorf("failed to initialize OIDC provider: %w", err)
@@ -750,7 +844,7 @@ All three modes converge on the same server-side token validation logic through 
        
        // Configure token verifier with required validation settings
        verifier := provider.Verifier(&oidc.Config{
-           ClientID:             config.Audience,
+           ClientID:             cfg.OIDCAudience,
            SupportedSigningAlgs: []string{oidc.RS256, oidc.ES256},
            SkipClientIDCheck:    false, // Verify audience
            SkipExpiryCheck:      false, // Verify expiration
@@ -800,7 +894,7 @@ All three modes converge on the same server-side token validation logic through 
    }
    ```
 
-6. **Implementation Benefits**:
+9. **Implementation Benefits**:
    - **JWKS Key Fetching**: `go-oidc` uses standard `net/http` for key retrieval
    - **Signature Validation**: Uses standard `crypto/rsa`, `crypto/ecdsa`, and `crypto/x509` packages
    - **TLS Certificate Validation**: Standard `crypto/tls` with configurable minimum version
@@ -810,9 +904,9 @@ All three modes converge on the same server-side token validation logic through 
    - **Claims Validation**: RFC 7519 JWT claims validation
    - **Algorithm Support**: Common signing algorithms (RS256, RS384, RS512, ES256, ES384, ES512)
 
-#### Phase 3: Enhanced Metadata Endpoint
+#### Phase 4: Enhanced Metadata Endpoint
 
-7. **OAuth Metadata Endpoint** (`cmd/main.go`):
+10. **OAuth Metadata Endpoint** (`internal/auth/metadata.go`):
    ```go
    import (
        "context"
@@ -822,7 +916,7 @@ All three modes converge on the same server-side token validation logic through 
        "time"
    )
 
-   func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, config *OAuthConfig) {
+   func handleOAuthMetadata(w http.ResponseWriter, r *http.Request, cfg *config.TrinoConfig) {
        // Use standard library context with timeout
        ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
        defer cancel()
@@ -831,10 +925,10 @@ All three modes converge on the same server-side token validation logic through 
        w.Header().Set("Content-Type", "application/json")
        w.Header().Set("Cache-Control", "public, max-age=3600") // Cache for 1 hour
        
-       switch config.Provider {
+       switch cfg.OAuthProvider {
        case "okta", "google", "azure":
            // Proxy OAuth provider's metadata using standard library
-           metadata, err := fetchProviderMetadata(ctx, config.Issuer)
+           metadata, err := fetchProviderMetadata(ctx, cfg.OIDCIssuer)
            if err != nil {
                http.Error(w, "Failed to fetch provider metadata", http.StatusInternalServerError)
                return
@@ -914,9 +1008,9 @@ All three modes converge on the same server-side token validation logic through 
    }
    ```
 
-#### Phase 4: Testing and Validation
+#### Phase 5: Testing and Validation
 
-8. **Testing Strategy**:
+11. **Testing Strategy**:
    ```go
    import (
        "context"
@@ -954,14 +1048,14 @@ All three modes converge on the same server-side token validation logic through 
        defer cancel()
        
        validator := &OIDCValidator{}
-       config := &OAuthConfig{
-           Provider: "okta",
-           Issuer:   server.URL,
-           Audience: "test-audience",
+       cfg := &config.TrinoConfig{
+           OAuthProvider: "okta",
+           OIDCIssuer:   server.URL,
+           OIDCAudience: "test-audience",
        }
        
        // Test initialization
-       err := validator.Initialize(config)
+       err := validator.Initialize(cfg)
        if err != nil {
            t.Fatalf("Failed to initialize validator: %v", err)
        }
@@ -987,17 +1081,20 @@ All three modes converge on the same server-side token validation logic through 
 
 ### Implementation Characteristics
 
-1. **Backward Compatibility**: Existing `JWT_SECRET` configurations remain functional
-2. **OIDC Support**: Implements standard OIDC/JWKS validation 
-3. **Multi-Provider Support**: Configurable for different OAuth providers (Okta, Google, Azure AD)
-4. **No Hardcoded Secrets**: Uses environment variables for configuration
-5. **MCP Compliance**: Implements OAuth 2.1 and MCP Authorization specification
-6. **Standard Library Usage**: Utilizes Go's built-in packages where possible
-7. **Established Libraries**: Uses well-maintained libraries (`go-oidc`, `golang.org/x/oauth2`)
-8. **Context Support**: Standard `context` patterns for timeout and cancellation
-9. **HTTP Configuration**: Standard `net/http` client with timeouts
-10. **Multiple Client Support**: Single server implementation supports Claude Code and mcp-remote
-11. **Unified Validation**: Same token validation logic across client types
+1. **MCP-go Middleware Integration**: Proper use of mcp-go server middleware system
+2. **Clean Architecture**: OAuth logic separated into internal packages, minimal main function
+3. **Backward Compatibility**: Existing `JWT_SECRET` configurations remain functional
+4. **OIDC Support**: Implements standard OIDC/JWKS validation 
+5. **Multi-Provider Support**: Configurable for different OAuth providers (Okta, Google, Azure AD)
+6. **No Hardcoded Secrets**: Uses environment variables for configuration
+7. **MCP Compliance**: Implements OAuth 2.1 and MCP Authorization specification
+8. **Standard Library Usage**: Utilizes Go's built-in packages where possible
+9. **Established Libraries**: Uses well-maintained libraries (`go-oidc`, `golang.org/x/oauth2`)
+10. **Context Support**: Standard `context` patterns for timeout and cancellation
+11. **HTTP Configuration**: Standard `net/http` client with timeouts
+12. **Multiple Client Support**: Single server implementation supports Claude Code and mcp-remote
+13. **Unified Validation**: Same token validation logic across client types
+14. **Per-Tool Authentication**: Each MCP tool handler can have authentication via middleware
 
 ### Standard Library Integration
 
@@ -1031,19 +1128,21 @@ TRINO_OAUTH_ENABLED=true
 **Production with Okta:**
 ```bash
 OAUTH_PROVIDER=okta
-OKTA_ISSUER=https://your-company.okta.com
-OKTA_AUDIENCE=api://mcp-trino-prod
-OKTA_CLIENT_ID=0oa1a2b3c4d5e6f7g8h9
+OIDC_ISSUER=https://your-company.okta.com
+OIDC_AUDIENCE=api://mcp-trino-prod
+OIDC_CLIENT_ID=0oa1a2b3c4d5e6f7g8h9
 TRINO_OAUTH_ENABLED=true
+MCP_TRANSPORT=http
 ```
 
 **Production with Google:**
 ```bash
 OAUTH_PROVIDER=google
-GOOGLE_ISSUER=https://accounts.google.com
-GOOGLE_AUDIENCE=123456789-abc.apps.googleusercontent.com
-GOOGLE_CLIENT_ID=123456789-abc.apps.googleusercontent.com
+OIDC_ISSUER=https://accounts.google.com
+OIDC_AUDIENCE=123456789-abc.apps.googleusercontent.com
+OIDC_CLIENT_ID=123456789-abc.apps.googleusercontent.com
 TRINO_OAUTH_ENABLED=true
+MCP_TRANSPORT=http
 ```
 
 ## Summary: Triple Mode Implementation Strategy
@@ -1076,6 +1175,7 @@ This implementation strategy extends the current fixed JWT implementation to sup
 - Standard error handling with `fmt.Errorf` and error wrapping
 
 **5. Architecture Characteristics**:
+- **MCP-go Middleware Integration**: Uses mcp-go server middleware system for per-tool authentication
 - **Single Token Validation Logic**: Same server-side validation for all three modes
 - **Unified OAuth Metadata**: One endpoint serves all client types
 - **Multiple Client Support**: Works with Claude Code, mcp-remote, and service-to-service
