@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -93,6 +94,8 @@ func (s *HTTPServer) Start(port string) error {
 		mux.HandleFunc("/oauth/callback", s.handleOAuthCallback)
 		// Add a simple client registration endpoint that accepts mcp-remote
 		mux.HandleFunc("/oauth/register", s.handleOAuthRegister)
+		// Add token endpoint to proxy to Okta
+		mux.HandleFunc("/oauth/token", s.handleOAuthToken)
 	}
 	
 	// Shared MCP handler function for both endpoints
@@ -208,7 +211,7 @@ func (s *HTTPServer) createMCPHandler(streamableServer *mcpserver.StreamableHTTP
 							"oauth": map[string]interface{}{
 								"issuer":                                 fmt.Sprintf("https://%s:%s", mcpHost, mcpPort),
 								"authorization_endpoint":                 fmt.Sprintf("https://%s:%s/oauth/authorize", mcpHost, mcpPort),
-								"token_endpoint":                        s.config.OIDCIssuer + "/oauth2/v1/token",
+								"token_endpoint":                        fmt.Sprintf("https://%s:%s/oauth/token", mcpHost, mcpPort),
 								"registration_endpoint":                 fmt.Sprintf("https://%s:%s/oauth/register", mcpHost, mcpPort),
 								"response_types_supported":              []string{"code"},
 								"response_modes_supported":              []string{"query"},
@@ -333,16 +336,42 @@ func (s *HTTPServer) handleOAuthAuthorize(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Use MCP server host/port for callback URL
-	mcpHost := getEnv("MCP_HOST", "localhost")
-	mcpPort := getEnv("MCP_PORT", "8080")
+	// Extract query parameters from mcp-remote
+	query := r.URL.Query()
+	
+	// Required PKCE parameters
+	codeChallenge := query.Get("code_challenge")
+	codeChallengeMethod := query.Get("code_challenge_method")
+	redirectURI := query.Get("redirect_uri")
+	state := query.Get("state")
+	clientID := query.Get("client_id")
+	
+	log.Printf("OAuth: Authorization request - client_id: %s, redirect_uri: %s, code_challenge: %s", 
+		clientID, redirectURI, codeChallenge[:10]+"...")
 
-	// Build Okta authorization URL
-	authURL := fmt.Sprintf("%s/oauth2/v1/authorize?client_id=%s&response_type=code&scope=openid%%20profile%%20email&redirect_uri=%s&state=%s",
+	// Build Okta authorization URL with all parameters
+	oktaParams := make(map[string]string)
+	oktaParams["client_id"] = s.config.OIDCClientID
+	oktaParams["response_type"] = "code"
+	oktaParams["scope"] = "openid profile email"
+	oktaParams["redirect_uri"] = redirectURI // Use mcp-remote's callback URL
+	oktaParams["state"] = state
+	
+	// Include PKCE parameters
+	if codeChallenge != "" {
+		oktaParams["code_challenge"] = codeChallenge
+		oktaParams["code_challenge_method"] = codeChallengeMethod
+	}
+	
+	// Build query string with proper URL encoding
+	values := url.Values{}
+	for k, v := range oktaParams {
+		values.Set(k, v)
+	}
+	
+	authURL := fmt.Sprintf("%s/oauth2/v1/authorize?%s",
 		s.config.OIDCIssuer,
-		s.config.OIDCClientID,
-		fmt.Sprintf("https://%s:%s/oauth/callback", mcpHost, mcpPort),
-		"oauth-state-123", // TODO: Generate random state
+		values.Encode(),
 	)
 
 	log.Printf("OAuth: Redirecting to Okta authorization URL: %s", authURL)
@@ -553,7 +582,7 @@ func (s *HTTPServer) handleOAuthRegister(w http.ResponseWriter, r *http.Request)
 		"client_id_issued_at":      time.Now().Unix(),
 		"grant_types":              []string{"authorization_code", "refresh_token"},
 		"response_types":           []string{"code"},
-		"redirect_uris":            regRequest["redirect_uris"],
+		"redirect_uris":            regRequest["redirect_uris"], // Keep mcp-remote's HTTP callbacks
 		"token_endpoint_auth_method": "none",
 		"application_type":         "native",
 		"client_name":              regRequest["client_name"],
@@ -565,6 +594,146 @@ func (s *HTTPServer) handleOAuthRegister(w http.ResponseWriter, r *http.Request)
 		log.Printf("OAuth: Failed to encode registration response: %v", err)
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// handleOAuthToken handles the OAuth token exchange endpoint
+func (s *HTTPServer) handleOAuthToken(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	log.Printf("OAuth: Token exchange request from %s", r.RemoteAddr)
+
+	// Parse the token request
+	if err := r.ParseForm(); err != nil {
+		log.Printf("OAuth: Failed to parse form: %v", err)
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Extract parameters
+	grantType := r.FormValue("grant_type")
+	code := r.FormValue("code")
+	redirectURI := r.FormValue("redirect_uri")
+	clientID := r.FormValue("client_id")
+	codeVerifier := r.FormValue("code_verifier")
+
+	// Log token request details (safely)
+	codePreview := code
+	if len(code) > 10 {
+		codePreview = code[:10] + "..."
+	}
+	log.Printf("OAuth: Token request - grant_type: %s, client_id: %s, redirect_uri: %s, code: %s", 
+		grantType, clientID, redirectURI, codePreview)
+
+	// Validate required parameters
+	if code == "" {
+		log.Printf("OAuth: Missing authorization code")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "invalid_request",
+			"error_description": "Missing authorization code",
+		})
+		return
+	}
+
+	// Validate grant type
+	if grantType != "authorization_code" {
+		log.Printf("OAuth: Unsupported grant type: %s", grantType)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "unsupported_grant_type",
+			"error_description": "Only authorization_code grant type is supported",
+		})
+		return
+	}
+
+	// Prepare token request to Okta
+	tokenURL := s.config.OIDCIssuer + "/oauth2/v1/token"
+	
+	// Build form data for Okta
+	formData := url.Values{}
+	formData.Set("grant_type", "authorization_code")
+	formData.Set("code", code)
+	formData.Set("redirect_uri", redirectURI)
+	formData.Set("client_id", s.config.OIDCClientID) // Use our configured Okta client ID
+	if codeVerifier != "" {
+		formData.Set("code_verifier", codeVerifier)
+	}
+
+	log.Printf("OAuth: Sending token request to Okta: %s", tokenURL)
+	log.Printf("OAuth: Request params - client_id: %s, redirect_uri: %s, code_verifier present: %v", 
+		s.config.OIDCClientID, redirectURI, codeVerifier != "")
+
+	// Create HTTP request to Okta
+	req, err := http.NewRequest("POST", tokenURL, strings.NewReader(formData.Encode()))
+	if err != nil {
+		log.Printf("OAuth: Failed to create token request: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+
+	// Send request to Okta
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("OAuth: Failed to exchange token with Okta: %v", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Parse Okta response
+	var oktaResponse map[string]interface{}
+	if err := json.NewDecoder(resp.Body).Decode(&oktaResponse); err != nil {
+		log.Printf("OAuth: Failed to parse Okta response: %v", err)
+		http.Error(w, "Token exchange failed", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("OAuth: Okta response status: %d", resp.StatusCode)
+
+	// Handle error responses from Okta
+	if resp.StatusCode != http.StatusOK {
+		log.Printf("OAuth: Okta error response: %+v", oktaResponse)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		json.NewEncoder(w).Encode(oktaResponse)
+		return
+	}
+
+	// Forward the successful response to mcp-remote
+	// Ensure required fields are present
+	tokenResponse := map[string]interface{}{
+		"access_token": oktaResponse["access_token"],
+		"token_type":   oktaResponse["token_type"],
+		"expires_in":   oktaResponse["expires_in"],
+	}
+
+	// Include optional fields if present
+	if idToken, ok := oktaResponse["id_token"]; ok {
+		tokenResponse["id_token"] = idToken
+	}
+	if refreshToken, ok := oktaResponse["refresh_token"]; ok {
+		tokenResponse["refresh_token"] = refreshToken
+	}
+	if scope, ok := oktaResponse["scope"]; ok {
+		tokenResponse["scope"] = scope
+	}
+
+	log.Printf("OAuth: Token exchange successful, returning tokens to mcp-remote")
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(tokenResponse)
 }
 
 // getEnv gets environment variable with default value
