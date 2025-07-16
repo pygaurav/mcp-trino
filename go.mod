@@ -7,6 +7,7 @@ require (
 	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/mark3labs/mcp-go v0.34.0
 	github.com/trinodb/trino-go-client v0.325.0
+	golang.org/x/oauth2 v0.30.0
 )
 
 require (
@@ -25,5 +26,4 @@ require (
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	golang.org/x/crypto v0.37.0 // indirect
 	golang.org/x/net v0.39.0 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 )

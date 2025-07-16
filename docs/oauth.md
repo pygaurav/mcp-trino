@@ -306,7 +306,7 @@ type TrinoConfig struct {
 }
 ```
 
-### 2. Bearer Token Validation (`internal/auth/oauth.go`)
+### 2. Bearer Token Validation (`internal/mcp/oauth.go`)
 - **Current Implementation**: JWT token validation using `github.com/golang-jwt/jwt/v5`
 - **Proper JWT Signature Verification**: Uses HMAC-SHA256 with proper signature validation (no ParseUnverified)
 - **Claims Extraction**: Standard JWT claims parsing with required subject validation
@@ -323,7 +323,7 @@ type TrinoConfig struct {
 - **Validation**: Simple validation of OAuth configuration parameters
 - **Logging**: OAuth mode status logging for debugging
 
-### 4. HTTP Authentication Implementation (`internal/auth/oauth.go`)
+### 4. HTTP Authentication Implementation (`internal/mcp/oauth.go`)
 - **Bearer Token Extraction**: Extracts Bearer tokens from Authorization headers
 - **Consolidated JWT Validation**: Shared `authenticateRequest()` function eliminates code duplication
 - **User Context Injection**: Add authenticated user context to requests
@@ -343,7 +343,7 @@ type TrinoConfig struct {
 - **RFC 8414 Compliance**: Exposes OAuth metadata at `/.well-known/oauth-authorization-server` and `/.well-known/openid-configuration`
 - **Resource Indicators**: Advertises support for RFC 8707 resource indicators
 - **Provider Integration**: Proxies provider's metadata with MCP-specific additions
-- **Status**: ✅ Implemented in `internal/server/http.go` with `handleOAuthMetadata` function
+- **Status**: ✅ Implemented in `internal/mcp/server.go` with OAuth metadata handlers
 
 **CRITICAL REQUIREMENT**: The OAuth metadata endpoint MUST be publicly accessible (no authentication required) for MCP clients to discover OAuth configuration. This is handled by processing metadata requests before authentication middleware.
 
@@ -564,7 +564,7 @@ All three modes converge on the same server-side token validation logic through 
    go mod tidy
    ```
 
-2. **Create Provider Interface** (`internal/auth/provider.go`):
+2. **Create Provider Interface** (`internal/mcp/provider.go`):
    ```go
    type TokenValidator interface {
        ValidateToken(token string) (*User, error)
@@ -581,7 +581,7 @@ All three modes converge on the same server-side token validation logic through 
    }
    ```
 
-3. **Update MCP Server Middleware** (`internal/auth/oauth.go`):
+3. **Update MCP Server Middleware** (`internal/mcp/oauth.go`):
    ```go
    import (
        "context"
@@ -702,7 +702,7 @@ All three modes converge on the same server-side token validation logic through 
 
 #### Phase 2: MCP Server Integration
 
-6. **OAuth Server Setup** (`internal/auth/server.go`):
+6. **OAuth Server Setup** (`internal/mcp/server.go`):
    ```go
    import (
        "context"
@@ -712,11 +712,10 @@ All three modes converge on the same server-side token validation logic through 
        "github.com/mark3labs/mcp-go/server"
        
        "your-module/internal/config"
-       "your-module/internal/handlers"
    )
 
    // SetupOAuthServer initializes OAuth validation and sets up MCP server with middleware
-   func SetupOAuthServer(cfg *config.TrinoConfig, s *server.MCPServer) error {
+   func SetupOAuthServer(cfg *config.TrinoConfig, mcpServer *server.MCPServer) error {
        if !cfg.OAuthEnabled {
            log.Println("OAuth authentication disabled")
            return nil
@@ -732,12 +731,9 @@ All three modes converge on the same server-side token validation logic through 
            return fmt.Errorf("failed to initialize OAuth validator: %w", err)
        }
        
-       // Apply OAuth middleware to all tool handlers
-       applyOAuthMiddleware(s, validator, cfg.OAuthEnabled)
-       
-       // Set up HTTP context function for token extraction
-       if cfg.Transport == "http" {
-           s.SetHTTPContextFunc(CreateHTTPContextFunc())
+       // Apply OAuth middleware to server
+       if err := applyOAuthMiddleware(mcpServer, validator, cfg.OAuthEnabled); err != nil {
+           return fmt.Errorf("failed to apply OAuth middleware: %w", err)
        }
        
        log.Printf("OAuth authentication enabled with provider: %s", cfg.OAuthProvider)
@@ -756,16 +752,16 @@ All three modes converge on the same server-side token validation logic through 
        }
    }
 
-   // applyOAuthMiddleware applies OAuth middleware to all tool handlers
-   func applyOAuthMiddleware(s *server.MCPServer, validator TokenValidator, enabled bool) {
+   // applyOAuthMiddleware applies OAuth middleware to the MCP server
+   func applyOAuthMiddleware(mcpServer *server.MCPServer, validator TokenValidator, enabled bool) error {
+       // Create middleware function
        middleware := OAuthMiddleware(validator, enabled)
        
-       // Apply middleware to each tool handler
-       s.SetToolHandler("execute_query", middleware(handlers.ExecuteQueryHandler))
-       s.SetToolHandler("list_catalogs", middleware(handlers.ListCatalogsHandler))
-       s.SetToolHandler("list_schemas", middleware(handlers.ListSchemasHandler))
-       s.SetToolHandler("list_tables", middleware(handlers.ListTablesHandler))
-       s.SetToolHandler("get_table_schema", middleware(handlers.GetTableSchemaHandler))
+       // Store the middleware in the server for use during tool handler registration
+       // This will be applied when handlers are registered
+       setOAuthMiddleware(mcpServer, middleware)
+       
+       return nil
    }
    ```
 
@@ -777,7 +773,7 @@ All three modes converge on the same server-side token validation logic through 
        
        "github.com/mark3labs/mcp-go/server"
        
-       "your-module/internal/auth"
+       "your-module/internal/mcp"
        "your-module/internal/config"
    )
 
@@ -789,7 +785,7 @@ All three modes converge on the same server-side token validation logic through 
        s := server.NewMCPServer("trino", "1.0.0")
        
        // Setup OAuth (if enabled)
-       if err := auth.SetupOAuthServer(cfg, s); err != nil {
+       if err := mcp.SetupOAuthServer(cfg, s); err != nil {
            log.Fatalf("Failed to setup OAuth: %v", err)
        }
        
@@ -802,7 +798,7 @@ All three modes converge on the same server-side token validation logic through 
 
 #### Phase 3: Okta OIDC Implementation
 
-8. **OIDC Discovery and JWKS Validation** (`internal/auth/oidc.go`):
+8. **OIDC Discovery and JWKS Validation** (`internal/mcp/oidc.go`):
    ```go
    import (
        "context"
@@ -907,7 +903,7 @@ All three modes converge on the same server-side token validation logic through 
 
 #### Phase 4: Enhanced Metadata Endpoint
 
-10. **OAuth Metadata Endpoint** (`internal/auth/metadata.go`):
+10. **OAuth Metadata Endpoint** (`internal/mcp/metadata.go`):
    ```go
    import (
        "context"
@@ -1226,11 +1222,11 @@ Based on the current architecture, OAuth/JWT authentication status:
 
 1. **Library Dependencies**: ✅ `github.com/golang-jwt/jwt/v5` added for JWT validation
 2. **Config Layer**: ✅ OAuth configuration parameters added (`internal/config/config.go`)
-3. **Authentication Layer**: ✅ Custom JWT validation implemented (`internal/auth/bearer.go`)
-4. **Middleware Layer**: ✅ Authentication middleware created (`internal/middleware/auth.go`)
+3. **Authentication Layer**: ✅ Custom JWT validation implemented (`internal/mcp/oauth.go`)
+4. **Middleware Layer**: ✅ Authentication middleware created (`internal/mcp/oauth.go`)
 5. **Handler Layer**: ✅ Authentication logging and user context handling implemented
-6. **Transport Layer**: ✅ OAuth middleware integration with HTTP server implemented
-7. **Discovery Layer**: ✅ OAuth provider discovery and public metadata endpoint implemented
+6. **Transport Layer**: ✅ OAuth middleware integration with HTTP server implemented (`internal/mcp/server.go`)
+7. **Discovery Layer**: ✅ OAuth provider discovery and public metadata endpoint implemented (`internal/mcp/metadata.go`)
 
 The current codebase has **complete OAuth/JWT authentication implementation**. All major components are implemented including public metadata endpoint for MCP compliance and full HTTP server integration. Since mcp-go v0.33.0 provides client-side OAuth capabilities but no server-side authentication, we implement the necessary server-side OAuth resource server functionality.
 
@@ -1241,6 +1237,7 @@ The current codebase has **complete OAuth/JWT authentication implementation**. A
 - **JWT Token Validation**: HMAC-SHA256 signature verification with proper claims validation
 - **Route Segregation**: Unauthenticated endpoints processed before authentication middleware
 - **MCP Specification Compliance**: Full compliance with MCP June 2025 authorization specification
+- **Consolidated Architecture**: All MCP functionality unified in `internal/mcp/` package
 - **Security Enhancements**: 
   - JWT secret caching with `sync.Once` pattern
   - Consolidated authentication logic (DRY principle)

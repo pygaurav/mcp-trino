@@ -1,4 +1,4 @@
-package handlers
+package mcp
 
 import (
 	"context"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/tuannvm/mcp-trino/internal/auth"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -199,7 +198,7 @@ func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallTool
 func RegisterTrinoTools(m *server.MCPServer, h *TrinoHandlers) {
 	// Get OAuth middleware if available
 	var middleware func(server.ToolHandlerFunc) server.ToolHandlerFunc
-	if oauthMiddleware := auth.GetOAuthMiddleware(m); oauthMiddleware != nil {
+	if oauthMiddleware := GetOAuthMiddleware(m); oauthMiddleware != nil {
 		middleware = oauthMiddleware
 	}
 	
