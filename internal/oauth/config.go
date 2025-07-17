@@ -36,8 +36,7 @@ func createValidator(cfg *config.TrinoConfig) (TokenValidator, error) {
 	case "okta", "google", "azure":
 		return &OIDCValidator{}, nil
 	default:
-		log.Printf("Unknown OAuth provider '%s', defaulting to HMAC", cfg.OAuthProvider)
-		return &HMACValidator{}, nil
+		return nil, fmt.Errorf("unknown OAuth provider: %s", cfg.OAuthProvider)
 	}
 }
 

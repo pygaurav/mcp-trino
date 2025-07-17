@@ -50,29 +50,7 @@ func (h *OAuth2Handler) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 		metadata["validation_method"] = "hmac_sha256"
 		metadata["signature_algorithm"] = "HS256"
 		metadata["requires_secret"] = true
-	case "okta":
-		metadata["validation_method"] = "oidc_jwks"
-		metadata["signature_algorithm"] = "RS256"
-		metadata["requires_secret"] = false
-		if h.config.Issuer != "" {
-			metadata["issuer"] = h.config.Issuer
-			metadata["jwks_uri"] = h.config.Issuer + "/.well-known/jwks.json"
-		}
-		if h.config.Audience != "" {
-			metadata["audience"] = h.config.Audience
-		}
-	case "google":
-		metadata["validation_method"] = "oidc_jwks"
-		metadata["signature_algorithm"] = "RS256"
-		metadata["requires_secret"] = false
-		if h.config.Issuer != "" {
-			metadata["issuer"] = h.config.Issuer
-			metadata["jwks_uri"] = h.config.Issuer + "/.well-known/jwks.json"
-		}
-		if h.config.Audience != "" {
-			metadata["audience"] = h.config.Audience
-		}
-	case "azure":
+	case "okta", "google", "azure":
 		metadata["validation_method"] = "oidc_jwks"
 		metadata["signature_algorithm"] = "RS256"
 		metadata["requires_secret"] = false

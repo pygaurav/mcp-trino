@@ -237,7 +237,7 @@ func (s *Server) createMCPHandler(streamableServer *mcpserver.StreamableHTTPServ
 				
 				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s", authorization_uri="%s/.well-known/oauth-authorization-server"`, 
 					mcpHost, 
-					fmt.Sprintf("https://%s:%s", mcpHost, mcpPort)))
+					fmt.Sprintf("%s://%s:%s", s.getScheme(), mcpHost, mcpPort)))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				
@@ -250,10 +250,10 @@ func (s *Server) createMCPHandler(streamableServer *mcpserver.StreamableHTTPServ
 						"message": "Invalid Request",
 						"data": map[string]interface{}{
 							"oauth": map[string]interface{}{
-								"issuer":                                 fmt.Sprintf("https://%s:%s", mcpHost, mcpPort),
-								"authorization_endpoint":                 fmt.Sprintf("https://%s:%s/oauth/authorize", mcpHost, mcpPort),
-								"token_endpoint":                        fmt.Sprintf("https://%s:%s/oauth/token", mcpHost, mcpPort),
-								"registration_endpoint":                 fmt.Sprintf("https://%s:%s/oauth/register", mcpHost, mcpPort),
+								"issuer":                                 fmt.Sprintf("%s://%s:%s", s.getScheme(), mcpHost, mcpPort),
+								"authorization_endpoint":                 fmt.Sprintf("%s://%s:%s/oauth/authorize", s.getScheme(), mcpHost, mcpPort),
+								"token_endpoint":                        fmt.Sprintf("%s://%s:%s/oauth/token", s.getScheme(), mcpHost, mcpPort),
+								"registration_endpoint":                 fmt.Sprintf("%s://%s:%s/oauth/register", s.getScheme(), mcpHost, mcpPort),
 								"response_types_supported":              []string{"code"},
 								"response_modes_supported":              []string{"query"},
 								"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
@@ -294,6 +294,17 @@ func (s *Server) handleSignals(done chan<- bool) {
 }
 
 // getOAuthStatus returns OAuth status string
+// getScheme returns the appropriate URL scheme (http or https) based on server configuration
+func (s *Server) getScheme() string {
+	certFile := getEnv("HTTPS_CERT_FILE", "")
+	keyFile := getEnv("HTTPS_KEY_FILE", "")
+	
+	if certFile != "" && keyFile != "" {
+		return "https"
+	}
+	return "http"
+}
+
 func (s *Server) getOAuthStatus() string {
 	if s.config.OAuthEnabled {
 		return " (OAuth enabled)"
@@ -309,37 +320,6 @@ func (s *Server) getOAuthStatusWithWarning() string {
 	return " (OAuth disabled)"
 }
 
-
-
-
-// NewMCPServer creates a new MCP server with the given configuration
-func NewMCPServer(trinoClient *trino.Client, trinoConfig *config.TrinoConfig, version string) *mcpserver.MCPServer {
-	// Create hooks for server-level authentication
-	hooks := &mcpserver.Hooks{}
-	// NOTE: We don't add authentication hooks here anymore
-	// OAuth discovery happens at the HTTP transport level
-	
-	mcpServer := mcpserver.NewMCPServer("Trino MCP Server", version,
-		mcpserver.WithToolCapabilities(true),
-		mcpserver.WithHooks(hooks),
-	)
-
-	// Setup OAuth authentication with provider support
-	if err := setupOAuthServer(trinoConfig, mcpServer); err != nil {
-		log.Printf("Warning: Failed to setup OAuth server: %v", err)
-	}
-
-	// Initialize tool handlers
-	trinoHandlers := &TrinoHandlers{TrinoClient: trinoClient}
-	RegisterTrinoTools(mcpServer, trinoHandlers)
-
-	return mcpServer
-}
-
-// ServeStdio starts the MCP server with STDIO transport
-func ServeStdio(mcpServer *mcpserver.MCPServer) error {
-	return mcpserver.ServeStdio(mcpServer)
-}
 
 // setupOAuthServer initializes OAuth validation and sets up MCP server with middleware
 func setupOAuthServer(cfg *config.TrinoConfig, mcpServer *mcpserver.MCPServer) error {

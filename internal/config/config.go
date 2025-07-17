@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -37,7 +38,7 @@ type TrinoConfig struct {
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
-func NewTrinoConfig() *TrinoConfig {
+func NewTrinoConfig() (*TrinoConfig, error) {
 	port, _ := strconv.Atoi(getEnv("TRINO_PORT", "8080"))
 	ssl, _ := strconv.ParseBool(getEnv("TRINO_SSL", "true"))
 	sslInsecure, _ := strconv.ParseBool(getEnv("TRINO_SSL_INSECURE", "true"))
@@ -81,8 +82,14 @@ func NewTrinoConfig() *TrinoConfig {
 		log.Println("WARNING: Write queries are enabled (TRINO_ALLOW_WRITE_QUERIES=true). SQL injection protection is bypassed.")
 	}
 
-	// Log OAuth mode status
+	// Validate and log OAuth mode status
 	if oauthEnabled {
+		// Validate OAuth provider
+		validProviders := map[string]bool{"hmac": true, "okta": true, "google": true, "azure": true}
+		if !validProviders[oauthProvider] {
+			return nil, fmt.Errorf("invalid OAuth provider '%s'. Supported providers: hmac, okta, google, azure", oauthProvider)
+		}
+		
 		log.Printf("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true) with provider: %s", oauthProvider)
 		if oauthProvider == "hmac" && jwtSecret == "" {
 			log.Println("WARNING: JWT_SECRET not set for HMAC provider. Using insecure default for development only.")
@@ -115,7 +122,7 @@ func NewTrinoConfig() *TrinoConfig {
 		OIDCClientID:      oidcClientID,
 		OIDCClientSecret:  oidcClientSecret,
 		OAuthRedirectURI:  oauthRedirectURI,
-	}
+	}, nil
 }
 
 // getEnv retrieves an environment variable or returns a default value
