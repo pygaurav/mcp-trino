@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	"github.com/tuannvm/mcp-trino/internal/config"
-	"github.com/tuannvm/mcp-trino/internal/server"
+	"github.com/tuannvm/mcp-trino/internal/mcp"
 	"github.com/tuannvm/mcp-trino/internal/trino"
 )
 
@@ -23,7 +23,10 @@ func main() {
 
 	// Initialize Trino configuration
 	log.Println("Loading Trino configuration...")
-	trinoConfig := config.NewTrinoConfig()
+	trinoConfig, err := config.NewTrinoConfig()
+	if err != nil {
+		log.Fatalf("Failed to load configuration: %v", err)
+	}
 
 	// Initialize Trino client
 	log.Println("Connecting to Trino server...")
@@ -47,7 +50,7 @@ func main() {
 
 	// Create MCP server
 	log.Println("Initializing MCP server...")
-	mcpServer := server.NewMCPServer(trinoClient, trinoConfig, Version)
+	server := mcp.NewServer(trinoClient, trinoConfig, Version)
 
 	// Choose server mode
 	transport := getEnv("MCP_TRANSPORT", "stdio")
@@ -55,13 +58,12 @@ func main() {
 	log.Printf("Starting MCP server with %s transport...", transport)
 	switch transport {
 	case "stdio":
-		if err := server.ServeStdio(mcpServer); err != nil {
+		if err := server.ServeStdio(); err != nil {
 			log.Fatalf("STDIO server error: %v", err)
 		}
 	case "http":
 		port := getEnv("MCP_PORT", "8080")
-		httpServer := server.NewHTTPServer(mcpServer, trinoConfig, Version)
-		if err := httpServer.Start(port); err != nil {
+		if err := server.ServeHTTP(port); err != nil {
 			log.Fatalf("HTTP server error: %v", err)
 		}
 	default:

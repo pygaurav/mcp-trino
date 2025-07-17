@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strconv"
@@ -25,18 +26,34 @@ type TrinoConfig struct {
 	
 	// OAuth mode configuration
 	OAuthEnabled      bool   // Enable OAuth 2.1 authentication
-	JWTSecret         string // JWT signing secret for token validation
+	OAuthProvider     string // OAuth provider: "hmac", "okta", "google", "azure"
+	JWTSecret         string // JWT signing secret for HMAC provider
+	
+	// OIDC provider configuration
+	OIDCIssuer        string // OIDC issuer URL
+	OIDCAudience      string // OIDC audience
+	OIDCClientID      string // OIDC client ID
+	OIDCClientSecret  string // OIDC client secret
+	OAuthRedirectURI  string // Fixed OAuth redirect URI (overrides dynamic callback)
 }
 
 // NewTrinoConfig creates a new TrinoConfig with values from environment variables or defaults
-func NewTrinoConfig() *TrinoConfig {
+func NewTrinoConfig() (*TrinoConfig, error) {
 	port, _ := strconv.Atoi(getEnv("TRINO_PORT", "8080"))
 	ssl, _ := strconv.ParseBool(getEnv("TRINO_SSL", "true"))
 	sslInsecure, _ := strconv.ParseBool(getEnv("TRINO_SSL_INSECURE", "true"))
 	scheme := getEnv("TRINO_SCHEME", "https")
 	allowWriteQueries, _ := strconv.ParseBool(getEnv("TRINO_ALLOW_WRITE_QUERIES", "false"))
 	oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
+	oauthProvider := strings.ToLower(getEnv("OAUTH_PROVIDER", "hmac"))
 	jwtSecret := getEnv("JWT_SECRET", "")
+	
+	// OIDC configuration
+	oidcIssuer := getEnv("OIDC_ISSUER", "")
+	oidcAudience := getEnv("OIDC_AUDIENCE", "")
+	oidcClientID := getEnv("OIDC_CLIENT_ID", "")
+	oidcClientSecret := getEnv("OIDC_CLIENT_SECRET", "")
+	oauthRedirectURI := getEnv("OAUTH_REDIRECT_URI", "")
 
 	// Parse query timeout from environment variable
 	const defaultTimeout = 30
@@ -65,11 +82,23 @@ func NewTrinoConfig() *TrinoConfig {
 		log.Println("WARNING: Write queries are enabled (TRINO_ALLOW_WRITE_QUERIES=true). SQL injection protection is bypassed.")
 	}
 
-	// Log OAuth mode status
+	// Validate and log OAuth mode status
 	if oauthEnabled {
-		log.Println("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true)")
-		if jwtSecret == "" {
-			log.Println("WARNING: JWT_SECRET not set. Using insecure default for development only.")
+		// Validate OAuth provider
+		validProviders := map[string]bool{"hmac": true, "okta": true, "google": true, "azure": true}
+		if !validProviders[oauthProvider] {
+			return nil, fmt.Errorf("invalid OAuth provider '%s'. Supported providers: hmac, okta, google, azure", oauthProvider)
+		}
+		
+		log.Printf("INFO: OAuth 2.1 authentication enabled (TRINO_OAUTH_ENABLED=true) with provider: %s", oauthProvider)
+		if oauthProvider == "hmac" && jwtSecret == "" {
+			log.Println("WARNING: JWT_SECRET not set for HMAC provider. Using insecure default for development only.")
+		}
+		if oauthProvider != "hmac" && oidcIssuer == "" {
+			log.Printf("WARNING: OIDC_ISSUER not set for %s provider. OAuth authentication may fail.", oauthProvider)
+		}
+		if oauthRedirectURI != "" {
+			log.Printf("INFO: Fixed OAuth redirect URI configured: %s", oauthRedirectURI)
 		}
 	}
 
@@ -86,8 +115,14 @@ func NewTrinoConfig() *TrinoConfig {
 		AllowWriteQueries: allowWriteQueries,
 		QueryTimeout:      queryTimeout,
 		OAuthEnabled:      oauthEnabled,
+		OAuthProvider:     oauthProvider,
 		JWTSecret:         jwtSecret,
-	}
+		OIDCIssuer:        oidcIssuer,
+		OIDCAudience:      oidcAudience,
+		OIDCClientID:      oidcClientID,
+		OIDCClientSecret:  oidcClientSecret,
+		OAuthRedirectURI:  oauthRedirectURI,
+	}, nil
 }
 
 // getEnv retrieves an environment variable or returns a default value
