@@ -14,7 +14,6 @@ func (h *OAuth2Handler) HandleMetadata(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "public, max-age=300") // Cache for 5 minutes
 	
 	if r.Method != "GET" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
 		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
@@ -77,7 +76,6 @@ func (h *OAuth2Handler) HandleAuthorizationServerMetadata(w http.ResponseWriter,
 	w.Header().Set("Cache-Control", "public, max-age=300") // Cache for 5 minutes
 	
 	if r.Method != "GET" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
 		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}
@@ -112,7 +110,6 @@ func (h *OAuth2Handler) HandleProtectedResourceMetadata(w http.ResponseWriter, r
 	w.Header().Set("Cache-Control", "public, max-age=300") // Cache for 5 minutes
 	
 	if r.Method != "GET" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
 		http.Error(w, `{"error":"Method not allowed"}`, http.StatusMethodNotAllowed)
 		return
 	}

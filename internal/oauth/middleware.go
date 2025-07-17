@@ -55,25 +55,34 @@ func GetOAuthToken(ctx context.Context) (string, bool) {
 // getCachedToken retrieves a cached token validation result
 func (tc *TokenCache) getCachedToken(tokenHash string) (*CachedToken, bool) {
 	tc.mu.RLock()
-	defer tc.mu.RUnlock()
 	
 	cached, exists := tc.cache[tokenHash]
 	if !exists {
+		tc.mu.RUnlock()
 		return nil, false
 	}
 	
 	// Check if token is expired
 	if time.Now().After(cached.ExpiresAt) {
-		// Remove expired token
 		tc.mu.RUnlock()
-		tc.mu.Lock()
-		delete(tc.cache, tokenHash)
-		tc.mu.Unlock()
-		tc.mu.RLock()
+		// Schedule expired token deletion in a separate operation
+		go tc.deleteExpiredToken(tokenHash)
 		return nil, false
 	}
 	
+	tc.mu.RUnlock()
 	return cached, true
+}
+
+// deleteExpiredToken safely deletes an expired token from the cache
+func (tc *TokenCache) deleteExpiredToken(tokenHash string) {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	
+	// Double-check if token is still expired before deleting
+	if cached, exists := tc.cache[tokenHash]; exists && time.Now().After(cached.ExpiresAt) {
+		delete(tc.cache, tokenHash)
+	}
 }
 
 // setCachedToken stores a token validation result

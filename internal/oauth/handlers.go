@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -136,9 +137,20 @@ func (h *OAuth2Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		
 		// If using fixed redirect URI, encode original client URI in state
 		if h.config.RedirectURI != "" {
-			encodedState := fmt.Sprintf("%s|%s", state, clientRedirectURI)
+			// Encode state and redirect URI safely using JSON + base64
+			stateData := map[string]string{
+				"state":    state,
+				"redirect": clientRedirectURI,
+			}
+			jsonData, err := json.Marshal(stateData)
+			if err != nil {
+				log.Printf("OAuth2: Failed to encode state data: %v", err)
+				http.Error(w, "Internal server error", http.StatusInternalServerError)
+				return
+			}
+			encodedState := base64.URLEncoding.EncodeToString(jsonData)
 			query.Set("state", encodedState)
-			log.Printf("OAuth2: Encoded state for proxy callback: %s", encodedState)
+			log.Printf("OAuth2: Encoded state for proxy callback (length: %d)", len(encodedState))
 		}
 		
 		parsedURL.RawQuery = query.Encode()
@@ -179,18 +191,39 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// If using fixed redirect URI, handle proxy callback
-	if h.config.RedirectURI != "" && strings.Contains(state, "|") {
-		parts := strings.SplitN(state, "|", 2)
-		if len(parts) == 2 {
-			originalState := parts[0]
-			originalRedirectURI := parts[1]
-			
-			log.Printf("OAuth2: Proxying callback to original client: %s", originalRedirectURI)
-			
-			// Build proxy callback URL
-			proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
-			http.Redirect(w, r, proxyURL, http.StatusFound)
-			return
+	if h.config.RedirectURI != "" {
+		// Try to decode the state parameter
+		jsonData, err := base64.URLEncoding.DecodeString(state)
+		if err == nil {
+			var stateData map[string]string
+			if err := json.Unmarshal(jsonData, &stateData); err == nil {
+				if originalState, ok := stateData["state"]; ok {
+					if originalRedirectURI, ok := stateData["redirect"]; ok {
+						log.Printf("OAuth2: Proxying callback to original client: %s", originalRedirectURI)
+						
+						// Build proxy callback URL
+						proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
+						http.Redirect(w, r, proxyURL, http.StatusFound)
+						return
+					}
+				}
+			}
+		}
+		
+		// Fallback: try legacy pipe-delimited format for backward compatibility
+		if strings.Contains(state, "|") {
+			parts := strings.SplitN(state, "|", 2)
+			if len(parts) == 2 {
+				originalState := parts[0]
+				originalRedirectURI := parts[1]
+				
+				log.Printf("OAuth2: Proxying callback to original client (legacy format): %s", originalRedirectURI)
+				
+				// Build proxy callback URL
+				proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
+				http.Redirect(w, r, proxyURL, http.StatusFound)
+				return
+			}
 		}
 	}
 	
