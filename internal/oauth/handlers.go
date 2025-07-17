@@ -342,7 +342,11 @@ func (p *pkceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Only modify POST requests to token endpoint
 	if req.Method == "POST" && strings.Contains(req.URL.Path, "/token") {
 		// Read the existing body
-		defer req.Body.Close()
+		defer func() {
+			if closeErr := req.Body.Close(); closeErr != nil {
+				log.Printf("Warning: failed to close request body: %v", closeErr)
+			}
+		}()
 		body, err := io.ReadAll(req.Body)
 		if err != nil {
 			return nil, err
