@@ -230,33 +230,13 @@ func CreateHTTPContextFunc() func(context.Context, *http.Request) context.Contex
 }
 
 // CreateRequestAuthHook creates a server-level authentication hook for all MCP requests
+// Note: This function is deprecated and should not be used as it cannot propagate context.
+// Use OAuthMiddleware at the tool level instead, which properly handles context propagation.
 func CreateRequestAuthHook(validator TokenValidator) func(context.Context, interface{}, interface{}) error {
 	return func(ctx context.Context, id interface{}, message interface{}) error {
-		// Extract OAuth token from context
-		tokenString, ok := GetOAuthToken(ctx)
-		if !ok {
-			log.Printf("OAuth: No token found in context for request ID: %v", id)
-			return fmt.Errorf("authentication required: missing OAuth token")
-		}
-
-		// Log token for debugging (first 50 chars)
-		tokenPreview := tokenString
-		if len(tokenString) > 50 {
-			tokenPreview = tokenString[:50] + "..."
-		}
-		log.Printf("OAuth: Validating token for request ID %v: %s", id, tokenPreview)
-
-		// Validate token using configured provider
-		user, err := validator.ValidateToken(tokenString)
-		if err != nil {
-			log.Printf("OAuth: Token validation failed for request ID %v: %v", id, err)
-			return fmt.Errorf("authentication failed: %w", err)
-		}
-
-		// Add user to context for downstream handlers
-		_ = context.WithValue(ctx, userContextKey, user)
-		log.Printf("OAuth: Authenticated user %s for request ID: %v", user.Username, id)
-
-		return nil // Success
+		// This hook cannot propagate context changes due to its signature limitation.
+		// Authentication is handled by tool-level middleware instead.
+		log.Printf("OAuth: Server-level auth hook called for request ID: %v (using tool-level middleware)", id)
+		return nil // Always succeed - actual auth is done at tool level
 	}
 }

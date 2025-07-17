@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -360,19 +361,22 @@ func applyOAuthMiddleware(mcpServer *mcpserver.MCPServer, validator oauth.TokenV
 }
 
 // Middleware storage for the MCP server
-var serverMiddleware map[*mcpserver.MCPServer]func(mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc
-
-func init() {
-	serverMiddleware = make(map[*mcpserver.MCPServer]func(mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc)
-}
+var (
+	serverMiddleware   = make(map[*mcpserver.MCPServer]func(mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc)
+	serverMiddlewareMu sync.RWMutex
+)
 
 // setOAuthMiddleware stores the OAuth middleware for a server
 func setOAuthMiddleware(mcpServer *mcpserver.MCPServer, middleware func(mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc) {
+	serverMiddlewareMu.Lock()
+	defer serverMiddlewareMu.Unlock()
 	serverMiddleware[mcpServer] = middleware
 }
 
 // GetOAuthMiddleware retrieves the OAuth middleware for a server
 func GetOAuthMiddleware(mcpServer *mcpserver.MCPServer) func(mcpserver.ToolHandlerFunc) mcpserver.ToolHandlerFunc {
+	serverMiddlewareMu.RLock()
+	defer serverMiddlewareMu.RUnlock()
 	return serverMiddleware[mcpServer]
 }
 

@@ -2,6 +2,7 @@ package oauth
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
 
 	"github.com/tuannvm/mcp-trino/internal/config"
@@ -47,20 +49,74 @@ type OAuth2Config struct {
 
 // NewOAuth2Handler creates a new OAuth2 handler using the standard library
 func NewOAuth2Handler(cfg *OAuth2Config) *OAuth2Handler {
+	var endpoint oauth2.Endpoint
+	
+	// Use OIDC discovery for supported providers, fallback to hardcoded for others
+	switch cfg.Provider {
+	case "okta", "google", "azure":
+		// Use OIDC discovery to get correct endpoints
+		if discoveredEndpoint, err := discoverOIDCEndpoints(cfg.Issuer); err != nil {
+			log.Printf("Warning: OIDC discovery failed for %s, using fallback endpoints: %v", cfg.Provider, err)
+			// Fallback to Okta-style endpoints as they're most common
+			endpoint = oauth2.Endpoint{
+				AuthURL:  cfg.Issuer + "/oauth2/v1/authorize",
+				TokenURL: cfg.Issuer + "/oauth2/v1/token",
+			}
+		} else {
+			endpoint = discoveredEndpoint
+		}
+	default:
+		// For HMAC and unknown providers, use hardcoded endpoints
+		endpoint = oauth2.Endpoint{
+			AuthURL:  cfg.Issuer + "/oauth2/v1/authorize",
+			TokenURL: cfg.Issuer + "/oauth2/v1/token",
+		}
+	}
+	
 	oauth2Config := &oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  cfg.Issuer + "/oauth2/v1/authorize",
-			TokenURL: cfg.Issuer + "/oauth2/v1/token",
-		},
-		Scopes: []string{"openid", "profile", "email"},
+		Endpoint:     endpoint,
+		Scopes:       []string{"openid", "profile", "email"},
 	}
 	
 	return &OAuth2Handler{
 		config:       cfg,
 		oauth2Config: oauth2Config,
 	}
+}
+
+// discoverOIDCEndpoints uses OIDC discovery to get the correct authorization and token endpoints
+func discoverOIDCEndpoints(issuer string) (oauth2.Endpoint, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	
+	// Configure HTTP client with appropriate timeouts and TLS settings
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: false, // Verify TLS certificates
+				MinVersion:         tls.VersionTLS12,
+			},
+			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 2,
+		},
+	}
+	
+	// Create OIDC provider with custom HTTP client
+	provider, err := oidc.NewProvider(
+		oidc.ClientContext(ctx, httpClient),
+		issuer,
+	)
+	if err != nil {
+		return oauth2.Endpoint{}, fmt.Errorf("failed to discover OIDC provider: %w", err)
+	}
+	
+	// Return the discovered endpoint
+	return provider.Endpoint(), nil
 }
 
 // NewOAuth2ConfigFromTrinoConfig creates OAuth2 config from Trino config
@@ -214,6 +270,12 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(state, "|") {
 			parts := strings.SplitN(state, "|", 2)
 			if len(parts) == 2 {
+				// Validate that neither part contains additional pipes
+				if strings.Contains(parts[0], "|") || strings.Contains(parts[1], "|") {
+					log.Printf("OAuth2: Invalid legacy state format detected")
+					h.showSuccessPage(w, code, state)
+					return
+				}
 				originalState := parts[0]
 				originalRedirectURI := parts[1]
 				
