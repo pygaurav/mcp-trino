@@ -6,7 +6,7 @@ require (
 	github.com/coreos/go-oidc/v3 v3.14.1
 	github.com/golang-jwt/jwt/v5 v5.2.3
 	github.com/mark3labs/mcp-go v0.34.0
-	github.com/trinodb/trino-go-client v0.325.0
+	github.com/trinodb/trino-go-client v0.326.0
 	golang.org/x/oauth2 v0.30.0
 )
 
