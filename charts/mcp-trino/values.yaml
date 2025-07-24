@@ -1,0 +1,206 @@
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+
+# Image configuration
+image:
+  registry: ghcr.io
+  repository: tuannvm/mcp-trino
+  tag: ""  # Will use Chart.appVersion if empty
+  pullPolicy: IfNotPresent
+
+# Deployment configuration
+replicaCount: 1
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+# Service configuration
+service:
+  type: ClusterIP
+  port: 8080
+  targetPort: 8080
+  annotations: {}
+
+# Ingress configuration
+ingress:
+  enabled: false
+  className: ""
+  annotations:
+    kubernetes.io/ingress.class: alb
+    alb.ingress.kubernetes.io/scheme: internal
+    alb.ingress.kubernetes.io/target-type: ip
+  hosts:
+    - host: mcp-trino.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# MCP Server configuration
+mcpServer:
+  transport: "http"  # http or stdio
+  port: 8080
+  host: "0.0.0.0"
+
+# Trino connection configuration
+trino:
+  host: "trino"
+  port: 8080
+  user: "trino"
+  password: ""
+  catalog: "memory"
+  schema: "default"
+  scheme: "https"
+  ssl: true
+  sslInsecure: false
+  allowWriteQueries: false
+  queryTimeout: 30
+  
+  # OAuth 2.1 configuration
+  oauth:
+    enabled: false
+    provider: "hmac"  # hmac, okta, google, azure
+    jwtSecret: ""
+    redirectURI: ""
+    
+    # OIDC configuration
+    oidc:
+      issuer: ""
+      audience: ""
+      clientId: ""
+      clientSecret: ""
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 500m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Pod configuration
+podAnnotations: {}
+podLabels: {}
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534
+
+# Health checks
+healthCheck:
+  enabled: true
+  startupProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# Service Account
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+  automount: false
+
+# RBAC
+rbac:
+  create: true
+
+# Network Policy
+networkPolicy:
+  enabled: false
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector: {}
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 8080  # Trino
+        - protocol: TCP
+          port: 443   # HTTPS
+        - protocol: TCP
+          port: 53    # DNS
+        - protocol: UDP
+          port: 53    # DNS
+
+# Node configuration
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Pod Disruption Budget
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1
+
+# EKS specific configuration
+eks:
+  # AWS Load Balancer Controller integration
+  loadBalancer:
+    enabled: false
+    annotations:
+      service.beta.kubernetes.io/aws-load-balancer-type: nlb
+      service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+  
+  # IAM Role for Service Account (IRSA)
+  serviceAccount:
+    annotations: {}
+    # eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT:role/mcp-trino-role
+
+# Extra environment variables
+extraEnvVars: []
+extraEnvVarsCM: ""
+extraEnvVarsSecret: ""
+
+# Extra volumes and volume mounts
+extraVolumes: []
+extraVolumeMounts: []

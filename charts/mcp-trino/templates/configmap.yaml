@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mcp-trino.fullname" . }}
+  labels:
+    {{- include "mcp-trino.labels" . | nindent 4 }}
+data:
+  TRINO_HOST: {{ .Values.trino.host | quote }}
+  TRINO_PORT: {{ .Values.trino.port | quote }}
+  TRINO_USER: {{ .Values.trino.user | quote }}
+  TRINO_CATALOG: {{ .Values.trino.catalog | quote }}
+  TRINO_SCHEMA: {{ .Values.trino.schema | quote }}
+  TRINO_SCHEME: {{ .Values.trino.scheme | quote }}
+  TRINO_SSL: {{ .Values.trino.ssl | quote }}
+  TRINO_SSL_INSECURE: {{ .Values.trino.sslInsecure | quote }}
+  TRINO_ALLOW_WRITE_QUERIES: {{ .Values.trino.allowWriteQueries | quote }}
+  TRINO_QUERY_TIMEOUT: {{ .Values.trino.queryTimeout | quote }}
+  MCP_TRANSPORT: {{ .Values.mcpServer.transport | quote }}
+  MCP_HOST: {{ .Values.mcpServer.host | quote }}
+  MCP_PORT: {{ .Values.mcpServer.port | quote }}
+  TRINO_OAUTH_ENABLED: {{ .Values.trino.oauth.enabled | quote }}
+  {{- if .Values.trino.oauth.enabled }}
+  OAUTH_PROVIDER: {{ .Values.trino.oauth.provider | quote }}
+  {{- if .Values.trino.oauth.redirectURI }}
+  OAUTH_REDIRECT_URI: {{ .Values.trino.oauth.redirectURI | quote }}
+  {{- end }}
+  {{- if .Values.trino.oauth.oidc.issuer }}
+  OIDC_ISSUER: {{ .Values.trino.oauth.oidc.issuer | quote }}
+  {{- end }}
+  {{- if .Values.trino.oauth.oidc.audience }}
+  OIDC_AUDIENCE: {{ .Values.trino.oauth.oidc.audience | quote }}
+  {{- end }}
+  {{- if .Values.trino.oauth.oidc.clientId }}
+  OIDC_CLIENT_ID: {{ .Values.trino.oauth.oidc.clientId | quote }}
+  {{- end }}
+  {{- end }}
