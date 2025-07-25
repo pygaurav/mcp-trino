@@ -2,7 +2,7 @@ name: Update Homebrew Formula on Release
 
 on:
   workflow_run:
-    workflows: ["Release Pipeline"]
+    workflows: ["Create Release"]
     types: [completed]
     branches: [main]
 
