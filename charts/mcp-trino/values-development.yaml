@@ -1,0 +1,83 @@
+# Development values for mcp-trino
+# This is an example configuration for development/testing
+
+replicaCount: 1
+
+image:
+  tag: "latest"  # Use latest for development
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+
+# Development Trino configuration
+trino:
+  host: "trino"  # Use local Trino service
+  port: 8080
+  user: "dev"
+  catalog: "memory"
+  schema: "default"
+  ssl: false
+  scheme: "http"
+  allowWriteQueries: true  # Allow for development/testing
+  queryTimeout: 30
+
+# Minimal resources for development
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Disable autoscaling in development
+autoscaling:
+  enabled: false
+
+# Disable security policies for easier development
+networkPolicy:
+  enabled: false
+
+podDisruptionBudget:
+  enabled: false
+
+# Relaxed security for development
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false  # Allow writes for development
+  runAsNonRoot: true
+  runAsUser: 65534
+
+# Development health checks with shorter delays
+healthCheck:
+  enabled: true
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 10
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+  readinessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 2
+    periodSeconds: 3
+    timeoutSeconds: 2
+    failureThreshold: 3
+
+# Development annotations
+podAnnotations:
+  dev.environment: "true"

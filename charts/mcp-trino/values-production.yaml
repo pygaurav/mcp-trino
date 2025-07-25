@@ -1,0 +1,139 @@
+# Production values for mcp-trino
+# This is an example configuration for production deployment on EKS
+
+replicaCount: 3
+
+image:
+  tag: "v0.2.0"  # Use specific version in production
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxUnavailable: 1
+    maxSurge: 1
+
+service:
+  type: LoadBalancer
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: nlb
+    service.beta.kubernetes.io/aws-load-balancer-scheme: internal
+
+# Production Trino configuration
+trino:
+  host: "production-trino.company.internal"
+  port: 8080
+  user: "mcp-analytics"
+  catalog: "hive"
+  schema: "analytics"
+  allowWriteQueries: false  # Keep false for security
+  queryTimeout: 60
+  
+  oauth:
+    enabled: true
+    provider: "okta"
+    oidc:
+      issuer: "https://company.okta.com"
+      audience: "trino-mcp"
+      clientId: "mcp-trino-client"
+      # clientSecret should be set via --set or external secret
+
+# Production resource limits
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# Enable autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Enable Pod Disruption Budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# EKS specific configuration
+eks:
+  loadBalancer:
+    enabled: true
+  serviceAccount:
+    annotations:
+      eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/mcp-trino-role
+
+# Enable network policies for security
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ai-services
+      ports:
+        - protocol: TCP
+          port: 8080
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 8080  # Trino
+        - protocol: TCP
+          port: 443   # HTTPS
+        - protocol: TCP
+          port: 53    # DNS
+        - protocol: UDP
+          port: 53    # DNS
+
+# Production affinity rules
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+    - podAffinityTerm:
+        labelSelector:
+          matchExpressions:
+          - key: app.kubernetes.io/name
+            operator: In
+            values:
+            - mcp-trino
+        topologyKey: kubernetes.io/hostname
+      weight: 100
+
+# Production tolerations if needed
+tolerations: []
+
+# Node selector for production nodes
+nodeSelector:
+  kubernetes.io/arch: amd64
+  node.kubernetes.io/instance-type: c5.large
+
+# Note: Monitoring support would require implementing ServiceMonitor template
+
+# Production annotations
+podAnnotations:
+  prometheus.io/scrape: "true"
+  prometheus.io/port: "8080"
+  prometheus.io/path: "/"
+
+# Security hardening
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65534
+  runAsGroup: 65534
+  fsGroup: 65534
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 65534

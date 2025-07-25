@@ -1,0 +1,21 @@
+apiVersion: v2
+name: mcp-trino
+description: A Helm chart for mcp-trino - MCP server for Trino distributed SQL engine
+type: application
+version: 0.1.0
+appVersion: "0.2.0"
+home: https://github.com/tuannvm/mcp-trino
+sources:
+  - https://github.com/tuannvm/mcp-trino
+maintainers:
+  - name: tuannvm
+    email: tuannvm@users.noreply.github.com
+keywords:
+  - mcp
+  - trino
+  - sql
+  - analytics
+  - ai
+annotations:
+  category: Analytics
+  licenses: MIT

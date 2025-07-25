@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "mcp-trino.fullname" . }}-test"
+  labels:
+    {{- include "mcp-trino.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  containers:
+    - name: curl
+      image: curlimages/curl:latest
+      command: ['curl']
+      args:
+        - --fail
+        - --silent
+        - --show-error
+        - --max-time
+        - "30"
+        - "http://{{ include "mcp-trino.fullname" . }}:{{ .Values.service.port }}/"
