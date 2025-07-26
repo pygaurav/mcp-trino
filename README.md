@@ -110,11 +110,8 @@ curl -fsSL https://raw.githubusercontent.com/tuannvm/mcp-trino/main/install.sh -
 The easiest way to install mcp-trino is using Homebrew:
 
 ```bash
-# Add the tap repository
-brew tap tuannvm/mcp
-
 # Install mcp-trino
-brew install mcp-trino
+brew install tuannvm/mcp/mcp-trino
 ```
 
 To update to the latest version:
