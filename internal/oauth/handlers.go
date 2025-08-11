@@ -26,31 +26,39 @@ type OAuth2Handler struct {
 	oauth2Config *oauth2.Config
 }
 
+// GetConfig returns the OAuth2 configuration
+func (h *OAuth2Handler) GetConfig() *OAuth2Config {
+	return h.config
+}
+
 // OAuth2Config holds OAuth2 configuration
 type OAuth2Config struct {
-	Enabled      bool
-	Provider     string
-	RedirectURI  string
-	
+	Enabled     bool
+	Provider    string
+	RedirectURI string
+
 	// OIDC configuration
 	Issuer       string
 	Audience     string
 	ClientID     string
 	ClientSecret string
-	
+
 	// Server configuration
-	MCPHost      string
-	MCPPort      string
-	Scheme       string
-	
+	MCPHost string
+	MCPPort string
+	Scheme  string
+
+	// MCPURL is the full URL of the MCP server, used for the resource endpoint in the OAuth 2.0 Protected Resource Metadata endpoint
+	MCPURL string
+
 	// Server version
-	Version      string
+	Version string
 }
 
 // NewOAuth2Handler creates a new OAuth2 handler using the standard library
 func NewOAuth2Handler(cfg *OAuth2Config) *OAuth2Handler {
 	var endpoint oauth2.Endpoint
-	
+
 	// Use OIDC discovery for supported providers, fallback to hardcoded for others
 	switch cfg.Provider {
 	case "okta", "google", "azure":
@@ -72,14 +80,14 @@ func NewOAuth2Handler(cfg *OAuth2Config) *OAuth2Handler {
 			TokenURL: cfg.Issuer + "/oauth2/v1/token",
 		}
 	}
-	
+
 	oauth2Config := &oauth2.Config{
 		ClientID:     cfg.ClientID,
 		ClientSecret: cfg.ClientSecret,
 		Endpoint:     endpoint,
 		Scopes:       []string{"openid", "profile", "email"},
 	}
-	
+
 	return &OAuth2Handler{
 		config:       cfg,
 		oauth2Config: oauth2Config,
@@ -90,7 +98,7 @@ func NewOAuth2Handler(cfg *OAuth2Config) *OAuth2Handler {
 func discoverOIDCEndpoints(issuer string) (oauth2.Endpoint, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	
+
 	// Configure HTTP client with appropriate timeouts and TLS settings
 	httpClient := &http.Client{
 		Timeout: 10 * time.Second,
@@ -105,7 +113,7 @@ func discoverOIDCEndpoints(issuer string) (oauth2.Endpoint, error) {
 			MaxIdleConnsPerHost: 2,
 		},
 	}
-	
+
 	// Create OIDC provider with custom HTTP client
 	provider, err := oidc.NewProvider(
 		oidc.ClientContext(ctx, httpClient),
@@ -114,7 +122,7 @@ func discoverOIDCEndpoints(issuer string) (oauth2.Endpoint, error) {
 	if err != nil {
 		return oauth2.Endpoint{}, fmt.Errorf("failed to discover OIDC provider: %w", err)
 	}
-	
+
 	// Return the discovered endpoint
 	return provider.Endpoint(), nil
 }
@@ -123,13 +131,14 @@ func discoverOIDCEndpoints(issuer string) (oauth2.Endpoint, error) {
 func NewOAuth2ConfigFromTrinoConfig(trinoConfig *config.TrinoConfig, version string) *OAuth2Config {
 	mcpHost := getEnv("MCP_HOST", "localhost")
 	mcpPort := getEnv("MCP_PORT", "8080")
-	
+	mcpURL := getEnv("MCP_URL", "http://localhost:8080")
+
 	// Determine scheme based on HTTPS configuration
 	scheme := "http"
 	if getEnv("HTTPS_CERT_FILE", "") != "" && getEnv("HTTPS_KEY_FILE", "") != "" {
 		scheme = "https"
 	}
-	
+
 	return &OAuth2Config{
 		Enabled:      trinoConfig.OAuthEnabled,
 		Provider:     trinoConfig.OAuthProvider,
@@ -140,6 +149,7 @@ func NewOAuth2ConfigFromTrinoConfig(trinoConfig *config.TrinoConfig, version str
 		ClientSecret: trinoConfig.OIDCClientSecret,
 		MCPHost:      mcpHost,
 		MCPPort:      mcpPort,
+		MCPURL:       mcpURL,
 		Scheme:       scheme,
 		Version:      version,
 	}
@@ -154,15 +164,15 @@ func (h *OAuth2Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 
 	// Extract query parameters
 	query := r.URL.Query()
-	
+
 	// PKCE parameters from client
 	codeChallenge := query.Get("code_challenge")
 	codeChallengeMethod := query.Get("code_challenge_method")
 	clientRedirectURI := query.Get("redirect_uri")
 	state := query.Get("state")
 	clientID := query.Get("client_id")
-	
-	log.Printf("OAuth2: Authorization request - client_id: %s, redirect_uri: %s, code_challenge: %s", 
+
+	log.Printf("OAuth2: Authorization request - client_id: %s, redirect_uri: %s, code_challenge: %s",
 		clientID, clientRedirectURI, truncateString(codeChallenge, 10))
 
 	// Set redirect URI - use fixed URI if configured, otherwise use client's URI
@@ -171,13 +181,13 @@ func (h *OAuth2Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		redirectURI = h.config.RedirectURI
 		log.Printf("OAuth2: Using fixed redirect URI: %s (overriding client's %s)", redirectURI, clientRedirectURI)
 	}
-	
+
 	// Update OAuth2 config with redirect URI
 	h.oauth2Config.RedirectURL = redirectURI
-	
+
 	// Create authorization URL with PKCE
 	authURL := h.oauth2Config.AuthCodeURL(state, oauth2.AccessTypeOffline)
-	
+
 	// Add PKCE parameters to the URL
 	if codeChallenge != "" {
 		parsedURL, err := url.Parse(authURL)
@@ -186,11 +196,11 @@ func (h *OAuth2Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
-		
+
 		query := parsedURL.Query()
 		query.Set("code_challenge", codeChallenge)
 		query.Set("code_challenge_method", codeChallengeMethod)
-		
+
 		// If using fixed redirect URI, encode original client URI in state
 		if h.config.RedirectURI != "" {
 			// Encode state and redirect URI safely using JSON + base64
@@ -208,7 +218,7 @@ func (h *OAuth2Handler) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 			query.Set("state", encodedState)
 			log.Printf("OAuth2: Encoded state for proxy callback (length: %d)", len(encodedState))
 		}
-		
+
 		parsedURL.RawQuery = query.Encode()
 		authURL = parsedURL.String()
 	}
@@ -229,7 +239,7 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	state := r.URL.Query().Get("state")
 	errorParam := r.URL.Query().Get("error")
 
-	log.Printf("OAuth2: Callback received - code: %s, state: %s, error: %s", 
+	log.Printf("OAuth2: Callback received - code: %s, state: %s, error: %s",
 		truncateString(code, 10), state, errorParam)
 
 	// Handle OAuth errors
@@ -256,7 +266,7 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 				if originalState, ok := stateData["state"]; ok {
 					if originalRedirectURI, ok := stateData["redirect"]; ok {
 						log.Printf("OAuth2: Proxying callback to original client: %s", originalRedirectURI)
-						
+
 						// Build proxy callback URL
 						proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
 						http.Redirect(w, r, proxyURL, http.StatusFound)
@@ -265,7 +275,7 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		
+
 		// Fallback: try legacy pipe-delimited format for backward compatibility
 		if strings.Contains(state, "|") {
 			parts := strings.SplitN(state, "|", 2)
@@ -278,9 +288,9 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 				}
 				originalState := parts[0]
 				originalRedirectURI := parts[1]
-				
+
 				log.Printf("OAuth2: Proxying callback to original client (legacy format): %s", originalRedirectURI)
-				
+
 				// Build proxy callback URL
 				proxyURL := fmt.Sprintf("%s?code=%s&state=%s", originalRedirectURI, code, originalState)
 				http.Redirect(w, r, proxyURL, http.StatusFound)
@@ -288,7 +298,7 @@ func (h *OAuth2Handler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	// Fallback: show success page
 	h.showSuccessPage(w, code, state)
 }
@@ -316,7 +326,7 @@ func (h *OAuth2Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 	clientID := r.FormValue("client_id")
 	codeVerifier := r.FormValue("code_verifier")
 
-	log.Printf("OAuth2: Token request - grant_type: %s, client_id: %s, redirect_uri: %s, code: %s", 
+	log.Printf("OAuth2: Token request - grant_type: %s, client_id: %s, redirect_uri: %s, code: %s",
 		grantType, clientID, clientRedirectURI, truncateString(code, 10))
 
 	// Validate parameters
@@ -338,13 +348,13 @@ func (h *OAuth2Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 		redirectURI = h.config.RedirectURI
 		log.Printf("OAuth2: Token exchange using fixed redirect URI: %s", redirectURI)
 	}
-	
+
 	h.oauth2Config.RedirectURL = redirectURI
 
 	// For PKCE, we need to manually add the code_verifier to the token exchange
 	// Since oauth2 library doesn't support PKCE directly, we'll use a custom approach
 	ctx := context.Background()
-	
+
 	// Create custom HTTP client for token exchange with PKCE
 	if codeVerifier != "" {
 		// Create a custom client that adds code_verifier to the token request
@@ -378,7 +388,7 @@ func (h *OAuth2Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 	if token.RefreshToken != "" {
 		response["refresh_token"] = token.RefreshToken
 	}
-	
+
 	// Add ID token if present
 	if idToken, ok := token.Extra("id_token").(string); ok {
 		response["id_token"] = idToken
@@ -394,7 +404,7 @@ func (h *OAuth2Handler) HandleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.WriteHeader(http.StatusOK)
-	
+
 	if err := json.NewEncoder(w).Encode(response); err != nil {
 		log.Printf("OAuth2: Failed to encode token response: %v", err)
 	}
@@ -446,24 +456,24 @@ func (p *pkceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Parse the form data
 		values, err := url.ParseQuery(string(body))
 		if err != nil {
 			return nil, err
 		}
-		
+
 		// Add code_verifier if not already present
 		if values.Get("code_verifier") == "" && p.codeVerifier != "" {
 			values.Set("code_verifier", p.codeVerifier)
 		}
-		
+
 		// Create new body with code_verifier
 		newBody := strings.NewReader(values.Encode())
 		req.Body = io.NopCloser(newBody)
 		req.ContentLength = int64(len(values.Encode()))
 	}
-	
+
 	return p.base.RoundTrip(req)
 }
 

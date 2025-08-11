@@ -25,14 +25,14 @@ func NewTrinoHandlers(client *trino.Client) *TrinoHandlers {
 
 // ExecuteQuery handles query execution
 func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	
+
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
 	if !ok {
 		mcpErr := fmt.Errorf("invalid arguments format")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
 	}
-	
+
 	// Extract the query parameter
 	query, ok := args["query"].(string)
 	if !ok {
@@ -61,7 +61,7 @@ func (h *TrinoHandlers) ExecuteQuery(ctx context.Context, request mcp.CallToolRe
 
 // ListCatalogs handles catalog listing
 func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	
+
 	catalogs, err := h.TrinoClient.ListCatalogs()
 	if err != nil {
 		log.Printf("Error listing catalogs: %v", err)
@@ -81,14 +81,14 @@ func (h *TrinoHandlers) ListCatalogs(ctx context.Context, request mcp.CallToolRe
 
 // ListSchemas handles schema listing
 func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	
+
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
 	if !ok {
 		mcpErr := fmt.Errorf("invalid arguments format")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
 	}
-	
+
 	// Extract catalog parameter (optional)
 	var catalog string
 	if catalogParam, ok := args["catalog"].(string); ok {
@@ -114,14 +114,14 @@ func (h *TrinoHandlers) ListSchemas(ctx context.Context, request mcp.CallToolReq
 
 // ListTables handles table listing
 func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	
+
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
 	if !ok {
 		mcpErr := fmt.Errorf("invalid arguments format")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
 	}
-	
+
 	// Extract catalog and schema parameters (optional)
 	var catalog, schema string
 	if catalogParam, ok := args["catalog"].(string); ok {
@@ -150,14 +150,14 @@ func (h *TrinoHandlers) ListTables(ctx context.Context, request mcp.CallToolRequ
 
 // GetTableSchema handles table schema retrieval
 func (h *TrinoHandlers) GetTableSchema(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-	
+
 	// Type assert Arguments to map[string]interface{}
 	args, ok := request.Params.Arguments.(map[string]interface{})
 	if !ok {
 		mcpErr := fmt.Errorf("invalid arguments format")
 		return mcp.NewToolResultErrorFromErr(mcpErr.Error(), mcpErr), nil
 	}
-	
+
 	// Extract parameters
 	var catalog, schema string
 	var table string
@@ -201,7 +201,7 @@ func RegisterTrinoTools(m *server.MCPServer, h *TrinoHandlers) {
 	if oauthMiddleware := GetOAuthMiddleware(m); oauthMiddleware != nil {
 		middleware = oauthMiddleware
 	}
-	
+
 	// Helper function to apply middleware if available
 	applyMiddleware := func(handler server.ToolHandlerFunc) server.ToolHandlerFunc {
 		if middleware != nil {
@@ -209,30 +209,30 @@ func RegisterTrinoTools(m *server.MCPServer, h *TrinoHandlers) {
 		}
 		return handler
 	}
-	
+
 	m.AddTool(mcp.NewTool("execute_query",
 		mcp.WithDescription("Execute a SQL query"),
 		mcp.WithString("query", mcp.Required(), mcp.Description("SQL query")),
 	), applyMiddleware(h.ExecuteQuery))
-	
-	m.AddTool(mcp.NewTool("list_catalogs", mcp.WithDescription("List catalogs")), 
+
+	m.AddTool(mcp.NewTool("list_catalogs", mcp.WithDescription("List catalogs")),
 		applyMiddleware(h.ListCatalogs))
-	
+
 	m.AddTool(mcp.NewTool("list_schemas",
 		mcp.WithDescription("List schemas"),
-		mcp.WithString("catalog", mcp.Description("Catalog"))), 
+		mcp.WithString("catalog", mcp.Description("Catalog"))),
 		applyMiddleware(h.ListSchemas))
-	
+
 	m.AddTool(mcp.NewTool("list_tables",
 		mcp.WithDescription("List tables"),
 		mcp.WithString("catalog", mcp.Description("Catalog")),
-		mcp.WithString("schema", mcp.Description("Schema"))), 
+		mcp.WithString("schema", mcp.Description("Schema"))),
 		applyMiddleware(h.ListTables))
-	
+
 	m.AddTool(mcp.NewTool("get_table_schema",
 		mcp.WithDescription("Get table schema"),
 		mcp.WithString("catalog", mcp.Description("Catalog")),
 		mcp.WithString("schema", mcp.Description("Schema")),
-		mcp.WithString("table", mcp.Required(), mcp.Description("Table"))), 
+		mcp.WithString("table", mcp.Required(), mcp.Description("Table"))),
 		applyMiddleware(h.GetTableSchema))
 }

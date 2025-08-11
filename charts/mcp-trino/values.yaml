@@ -29,10 +29,11 @@ service:
 ingress:
   enabled: false
   className: ""
-  annotations:
-    kubernetes.io/ingress.class: alb
-    alb.ingress.kubernetes.io/scheme: internal
-    alb.ingress.kubernetes.io/target-type: ip
+  annotations: {}
+  # annotations for ALB ingress controller
+    # kubernetes.io/ingress.class: alb
+    # alb.ingress.kubernetes.io/scheme: internal
+    # alb.ingress.kubernetes.io/target-type: ip
   hosts:
     - host: mcp-trino.local
       paths:

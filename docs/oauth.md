@@ -23,6 +23,29 @@ The mcp-trino server implements OAuth 2.0 as a **resource server**, validating J
                                                └─────────────────┘
 ```
 
+### Okta Oauth workflow example
+```mermaid
+sequenceDiagram
+    participant MCP_Client as MCP client<br/>Client redirectURI
+    participant MCP_Server as MCP server<br/>MCP redirectURI
+    participant Okta_Server as Okta server<br/>redirectURI
+
+    %% Step 1 - Auth to MCP
+    MCP_Client->>MCP_Server: 1.0 Request MCP without token
+    MCP_Server-->>MCP_Client: 1.1 Return 401 and MCP OAuth URL
+    MCP_Client->>MCP_Server: 1.2 Request MCP OAuth URL
+    MCP_Server-->>MCP_Client: 1.3 Redirect to Okta server
+
+    %% Step 2 - request to Okta
+    MCP_Client->>Okta_Server: 2. Request Okta OAuth API
+
+    %% Step 3 - Callback from Okta
+    Okta_Server-->>MCP_Server: 3. Callback MCP remote server
+
+    %% Step 4 - Proxy back to client
+    MCP_Server-->>MCP_Client: 4. Proxy back to client
+```
+
 ### Authentication Flow
 
 1. **Client Authentication**: AI clients authenticate with OAuth provider

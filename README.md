@@ -707,12 +707,15 @@ The server will automatically start with HTTPS when certificate files are provid
 
 Since the server supports JWT authentication and HTTP transport, you can deploy it as a remote MCP server accessible to multiple clients over the network.
 
+> **Important**: When deploying a remote MCP server (behind a load balancer, reverse proxy, or with a public domain), you must set `MCP_URL` to the public base URL of your MCP server (including scheme and port if non-standard). This value is used in OAuth metadata and printed endpoints so clients discover the correct URLs.
+
 ### Production Deployment Example
 
 ```bash
 # Deploy with HTTPS and JWT authentication
 export MCP_TRANSPORT=http
 export MCP_PORT=443
+export MCP_URL=https://your-mcp-server.com
 export TRINO_OAUTH_ENABLED=true
 export HTTPS_CERT_FILE=/etc/ssl/certs/mcp-trino.pem
 export HTTPS_KEY_FILE=/etc/ssl/private/mcp-trino.key
@@ -870,6 +873,7 @@ The server can be configured using the following environment variables:
 | MCP_TRANSPORT          | Transport method (stdio/http)     | stdio     |
 | MCP_PORT               | HTTP port for http transport      | 8080      |
 | MCP_HOST               | Host for HTTP callbacks           | localhost |
+| MCP_URL                | Public base URL of MCP server (used for OAuth metadata and client discovery); required for remote deployments | http://localhost:8080 |
 | TRINO_OAUTH_ENABLED    | Enable OAuth authentication       | false     |
 | OAUTH_PROVIDER         | OAuth provider (hmac/okta/google/azure) | hmac   |
 | JWT_SECRET             | JWT secret for HMAC mode          | (empty)   |

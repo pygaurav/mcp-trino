@@ -32,7 +32,7 @@ FROM --platform=$TARGETPLATFORM alpine:latest
 
 RUN apk --no-cache add ca-certificates
 
-WORKDIR /root/
+WORKDIR /app
 
 # Copy the binary from the builder stage
 COPY --from=builder /app/trino-mcp .

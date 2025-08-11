@@ -45,7 +45,7 @@ func CreateOAuth2Handler(cfg *config.TrinoConfig, version string) *OAuth2Handler
 	if !cfg.OAuthEnabled {
 		return nil
 	}
-	
+
 	oauth2Config := NewOAuth2ConfigFromTrinoConfig(cfg, version)
 	return NewOAuth2Handler(oauth2Config)
 }

@@ -31,13 +31,13 @@ type Server struct {
 func NewServer(trinoClient *trino.Client, trinoConfig *config.TrinoConfig, version string) *Server {
 	// Create MCP server
 	mcpServer := createMCPServer(trinoClient, trinoConfig, version)
-	
+
 	// Create OAuth2 handler if OAuth is enabled
 	var oauthHandler *oauth.OAuth2Handler
 	if trinoConfig.OAuthEnabled {
 		oauthHandler = oauth.CreateOAuth2Handler(trinoConfig, version)
 	}
-	
+
 	return &Server{
 		mcpServer:    mcpServer,
 		config:       trinoConfig,
@@ -50,7 +50,7 @@ func NewServer(trinoClient *trino.Client, trinoConfig *config.TrinoConfig, versi
 func createMCPServer(trinoClient *trino.Client, trinoConfig *config.TrinoConfig, version string) *mcpserver.MCPServer {
 	// Create hooks for server-level authentication
 	hooks := &mcpserver.Hooks{}
-	
+
 	mcpServer := mcpserver.NewMCPServer("Trino MCP Server", version,
 		mcpserver.WithToolCapabilities(true),
 		mcpserver.WithHooks(hooks),
@@ -76,7 +76,7 @@ func (s *Server) ServeStdio() error {
 // ServeHTTP starts the MCP server with HTTP transport
 func (s *Server) ServeHTTP(port string) error {
 	addr := fmt.Sprintf(":%s", port)
-	
+
 	// Create StreamableHTTP server instance
 	log.Println("Setting up StreamableHTTP server...")
 	var streamableServer *mcpserver.StreamableHTTPServer
@@ -94,7 +94,7 @@ func (s *Server) ServeHTTP(port string) error {
 			}
 			return ctx
 		}
-		
+
 		streamableServer = mcpserver.NewStreamableHTTPServer(
 			s.mcpServer,
 			mcpserver.WithEndpointPath("/mcp"),
@@ -108,13 +108,13 @@ func (s *Server) ServeHTTP(port string) error {
 			mcpserver.WithStateLess(false),
 		)
 	}
-	
+
 	// Create HTTP mux for routing
 	mux := http.NewServeMux()
-	
+
 	// Add status endpoint
 	mux.HandleFunc("/", s.handleStatus)
-	
+
 	// Add OAuth metadata endpoints for MCP compliance
 	if s.config.OAuthEnabled && s.oauthHandler != nil {
 		// RFC 8414: OAuth 2.0 Authorization Server Metadata
@@ -123,23 +123,23 @@ func (s *Server) ServeHTTP(port string) error {
 		mux.HandleFunc("/.well-known/oauth-protected-resource", s.oauthHandler.HandleProtectedResourceMetadata)
 		// Legacy endpoint for backward compatibility
 		mux.HandleFunc("/.well-known/oauth-metadata", s.oauthHandler.HandleMetadata)
-		
+
 		// Add OAuth authorization flow endpoints
 		mux.HandleFunc("/oauth/authorize", s.oauthHandler.HandleAuthorize)
 		mux.HandleFunc("/oauth/callback", s.oauthHandler.HandleCallback)
 		mux.HandleFunc("/oauth/register", s.oauthHandler.HandleRegister)
 		mux.HandleFunc("/oauth/token", s.oauthHandler.HandleToken)
-		
+
 		// Add /callback redirect for Claude Code compatibility
 		mux.HandleFunc("/callback", s.oauthHandler.HandleCallbackRedirect)
 	}
-	
+
 	// Shared MCP handler function for both endpoints
 	mcpHandler := s.createMCPHandler(streamableServer)
-	
+
 	// Add MCP endpoint (modern)
 	mux.HandleFunc("/mcp", mcpHandler)
-	
+
 	// Add SSE endpoint (backward compatibility)
 	mux.HandleFunc("/sse", mcpHandler)
 
@@ -156,38 +156,39 @@ func (s *Server) ServeHTTP(port string) error {
 		// Check for HTTPS certificates
 		certFile := getEnv("HTTPS_CERT_FILE", "")
 		keyFile := getEnv("HTTPS_KEY_FILE", "")
-		
+		oauth2Config := s.oauthHandler.GetConfig()
+
 		if certFile != "" && keyFile != "" {
 			// Start HTTPS server
 			oauthStatus := s.getOAuthStatus()
-			
+
 			log.Printf("Starting HTTPS server on %s%s", addr, oauthStatus)
-			log.Printf("  - Modern endpoint: https://localhost%s/mcp", addr)
-			log.Printf("  - Legacy endpoint: https://localhost%s/sse (backward compatibility)", addr)
-			log.Printf("  - OAuth metadata: https://localhost%s/.well-known/oauth-authorization-server", addr)
-			log.Printf("  - OAuth metadata (legacy): https://localhost%s/.well-known/oauth-metadata", addr)
+			log.Printf("  - Modern endpoint: %s/mcp", oauth2Config.MCPURL)
+			log.Printf("  - Legacy endpoint: %s/sse (backward compatibility)", oauth2Config.MCPURL)
+			log.Printf("  - OAuth metadata: %s/.well-known/oauth-authorization-server", oauth2Config.MCPURL)
+			log.Printf("  - OAuth metadata (legacy): %s/.well-known/oauth-metadata", oauth2Config.MCPURL)
 			if s.config.OAuthEnabled {
-				log.Printf("  - OAuth callback: https://localhost%s/oauth/callback", addr)
-				log.Printf("  - OAuth callback (Claude Code): https://localhost%s/callback (redirects to /oauth/callback)", addr)
+				log.Printf("  - OAuth callback: %s/oauth/callback", oauth2Config.MCPURL)
+				log.Printf("  - OAuth callback (Claude Code): %s/callback (redirects to /oauth/callback)", oauth2Config.MCPURL)
 			}
-			
+
 			if err := httpServer.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTPS server error: %v", err)
 			}
 		} else {
 			// Start HTTP server
 			oauthStatus := s.getOAuthStatusWithWarning()
-			
+
 			log.Printf("Starting HTTP server on %s%s", addr, oauthStatus)
-			log.Printf("  - Modern endpoint: http://localhost%s/mcp", addr)
-			log.Printf("  - Legacy endpoint: http://localhost%s/sse (backward compatibility)", addr)
-			log.Printf("  - OAuth metadata: http://localhost%s/.well-known/oauth-authorization-server", addr)
-			log.Printf("  - OAuth metadata (legacy): http://localhost%s/.well-known/oauth-metadata", addr)
+			log.Printf("  - Modern endpoint: %s/mcp", oauth2Config.MCPURL)
+			log.Printf("  - Legacy endpoint: %s/sse (backward compatibility)", oauth2Config.MCPURL)
+			log.Printf("  - OAuth metadata: %s/.well-known/oauth-authorization-server", oauth2Config.MCPURL)
+			log.Printf("  - OAuth metadata (legacy): %s/.well-known/oauth-metadata", oauth2Config.MCPURL)
 			if s.config.OAuthEnabled {
-				log.Printf("  - OAuth callback: http://localhost%s/oauth/callback", addr)
-				log.Printf("  - OAuth callback (Claude Code): http://localhost%s/callback (redirects to /oauth/callback)", addr)
+				log.Printf("  - OAuth callback: %s/oauth/callback", oauth2Config.MCPURL)
+				log.Printf("  - OAuth callback (Claude Code): %s/callback (redirects to /oauth/callback)", oauth2Config.MCPURL)
 			}
-			
+
 			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("HTTP server error: %v", err)
 			}
@@ -196,11 +197,11 @@ func (s *Server) ServeHTTP(port string) error {
 
 	<-done
 	log.Println("Shutting down HTTP server...")
-	
+
 	// Allow 30 seconds for graceful shutdown
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	
+
 	log.Println("Waiting for active connections to finish (max 30 seconds)...")
 	if err := httpServer.Shutdown(ctx); err != nil {
 		log.Printf("HTTP server forced shutdown after timeout: %v", err)
@@ -217,44 +218,44 @@ func (s *Server) createMCPHandler(streamableServer *mcpserver.StreamableHTTPServ
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		
+
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
-		
-		log.Printf("MCP %s %s", r.Method, r.URL.Path)
-		
+
+		log.Printf("MCP %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+
 		// Check if OAuth is enabled and no token is provided
 		if s.config.OAuthEnabled {
 			authHeader := r.Header.Get("Authorization")
 			if authHeader == "" || !strings.HasPrefix(authHeader, "Bearer ") {
 				// Return 401 with OAuth discovery information
 				log.Printf("OAuth: No bearer token provided, returning 401 with discovery info")
-				
+
 				// Use MCP server host/port, not Trino
 				mcpHost := getEnv("MCP_HOST", "localhost")
 				mcpPort := getEnv("MCP_PORT", "8080")
-				
-				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s", authorization_uri="%s/.well-known/oauth-authorization-server"`, 
-					mcpHost, 
+
+				w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Bearer realm="%s", authorization_uri="%s/.well-known/oauth-authorization-server"`,
+					mcpHost,
 					fmt.Sprintf("%s://%s:%s", s.getScheme(), mcpHost, mcpPort)))
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
-				
+
 				// Return error response that triggers OAuth discovery
 				response := map[string]interface{}{
 					"jsonrpc": "2.0",
-					"id": nil,
+					"id":      nil,
 					"error": map[string]interface{}{
-						"code": -32600,
+						"code":    -32600,
 						"message": "Invalid Request",
 						"data": map[string]interface{}{
 							"oauth": map[string]interface{}{
-								"issuer":                                 fmt.Sprintf("%s://%s:%s", s.getScheme(), mcpHost, mcpPort),
-								"authorization_endpoint":                 fmt.Sprintf("%s://%s:%s/oauth/authorize", s.getScheme(), mcpHost, mcpPort),
-								"token_endpoint":                        fmt.Sprintf("%s://%s:%s/oauth/token", s.getScheme(), mcpHost, mcpPort),
-								"registration_endpoint":                 fmt.Sprintf("%s://%s:%s/oauth/register", s.getScheme(), mcpHost, mcpPort),
+								"issuer":                                s.oauthHandler.GetConfig().Issuer,
+								"authorization_endpoint":                fmt.Sprintf("%s/oauth2/v1/authorize", s.oauthHandler.GetConfig().Issuer),
+								"token_endpoint":                        fmt.Sprintf("%s/oauth2/v1/token", s.oauthHandler.GetConfig().Issuer),
+								"registration_endpoint":                 fmt.Sprintf("%s/oauth2/v1/clients", s.oauthHandler.GetConfig().Issuer),
 								"response_types_supported":              []string{"code"},
 								"response_modes_supported":              []string{"query"},
 								"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
@@ -267,13 +268,13 @@ func (s *Server) createMCPHandler(streamableServer *mcpserver.StreamableHTTPServ
 				_ = json.NewEncoder(w).Encode(response)
 				return
 			}
-			
+
 			// Add OAuth context
 			contextFunc := oauth.CreateHTTPContextFunc()
 			ctx := contextFunc(r.Context(), r)
 			r = r.WithContext(ctx)
 		}
-		
+
 		// Handle MCP request using StreamableHTTP server
 		streamableServer.ServeHTTP(w, r)
 	}
@@ -299,7 +300,7 @@ func (s *Server) handleSignals(done chan<- bool) {
 func (s *Server) getScheme() string {
 	certFile := getEnv("HTTPS_CERT_FILE", "")
 	keyFile := getEnv("HTTPS_KEY_FILE", "")
-	
+
 	if certFile != "" && keyFile != "" {
 		return "https"
 	}
@@ -320,7 +321,6 @@ func (s *Server) getOAuthStatusWithWarning() string {
 	}
 	return " (OAuth disabled)"
 }
-
 
 // setupOAuthServer initializes OAuth validation and sets up MCP server with middleware
 func setupOAuthServer(cfg *config.TrinoConfig, mcpServer *mcpserver.MCPServer) error {
@@ -346,7 +346,6 @@ func setupOAuthServer(cfg *config.TrinoConfig, mcpServer *mcpserver.MCPServer) e
 
 	return nil
 }
-
 
 // applyOAuthMiddleware applies OAuth middleware to the MCP server
 func applyOAuthMiddleware(mcpServer *mcpserver.MCPServer, validator oauth.TokenValidator, enabled bool) error {
@@ -387,6 +386,3 @@ func getEnv(key, def string) string {
 	}
 	return def
 }
-
-
-
