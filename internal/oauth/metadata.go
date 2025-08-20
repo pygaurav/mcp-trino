@@ -94,6 +94,11 @@ func (h *OAuth2Handler) HandleAuthorizationServerMetadata(w http.ResponseWriter,
 		"revocation_endpoint":                   fmt.Sprintf("%s/oauth/revoke", h.config.MCPURL),
 	}
 
+	// Add redirect URIs for mcp-remote compatibility
+	if h.config.RedirectURI != "" {
+		metadata["redirect_uris"] = []string{h.config.RedirectURI}
+	}
+
 	// Encode and send response
 	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(metadata); err != nil {
@@ -161,12 +166,14 @@ func (h *OAuth2Handler) HandleRegister(w http.ResponseWriter, r *http.Request) {
 		"client_name":                regRequest["client_name"],
 	}
 
-	// Use fixed redirect URI if configured, otherwise use client's redirect URIs
-	if h.config.RedirectURI != "" {
+	// Allow clients to register their own redirect URIs (needed for mcp-remote)
+	if redirectUris, ok := regRequest["redirect_uris"]; ok {
+		response["redirect_uris"] = redirectUris
+		log.Printf("OAuth2: Registration allowing client redirect URIs: %v", redirectUris)
+	} else if h.config.RedirectURI != "" {
+		// Fallback to fixed redirect URI if no client URIs provided
 		response["redirect_uris"] = []string{h.config.RedirectURI}
 		log.Printf("OAuth2: Registration response using fixed redirect URI: %s", h.config.RedirectURI)
-	} else {
-		response["redirect_uris"] = regRequest["redirect_uris"]
 	}
 
 	w.Header().Set("Content-Type", "application/json")
