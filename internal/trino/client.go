@@ -73,11 +73,11 @@ func (c *Client) Close() error {
 func isReadOnlyQuery(query string) bool {
 	// Convert to lowercase for case-insensitive comparison and normalize whitespace
 	queryLower := strings.ToLower(strings.TrimSpace(query))
-	
+
 	// Replace any newline characters with spaces to normalize the query format
 	queryLower = strings.ReplaceAll(queryLower, "\n", " ")
 	queryLower = strings.ReplaceAll(queryLower, "\r", " ")
-	
+
 	// Ensure there's at least one space after keywords for proper prefix matching
 	if strings.HasPrefix(queryLower, "select") && !strings.HasPrefix(queryLower, "select ") {
 		queryLower = "select " + queryLower[6:]
@@ -104,7 +104,7 @@ func isReadOnlyQuery(query string) bool {
 	writeOperations := []string{
 		"insert ", "update ", "delete ", "drop ", "create ", "alter ", "truncate ",
 	}
-	
+
 	for _, op := range writeOperations {
 		if strings.Contains(queryLower, op) {
 			return false
@@ -283,4 +283,21 @@ func (c *Client) GetTableSchema(catalog, schema, table string) ([]map[string]int
 
 	query := fmt.Sprintf("DESCRIBE %s.%s.%s", catalog, schema, table)
 	return c.ExecuteQuery(query)
+}
+
+// ExplainQuery returns the query execution plan for a given SQL query
+func (c *Client) ExplainQuery(query string, format string) ([]map[string]interface{}, error) {
+	// Build EXPLAIN query with optional TYPE format (LOGICAL|DISTRIBUTED|VALIDATE|IO)
+	explainQuery := "EXPLAIN"
+	if f := strings.ToUpper(strings.TrimSpace(format)); f != "" {
+		switch f {
+		case "LOGICAL", "DISTRIBUTED", "VALIDATE", "IO":
+			explainQuery = fmt.Sprintf("EXPLAIN (TYPE %s)", f)
+		default:
+			return nil, fmt.Errorf("invalid EXPLAIN format: %q (allowed: LOGICAL, DISTRIBUTED, VALIDATE, IO)", format)
+		}
+	}
+	explainQuery = fmt.Sprintf("%s %s", explainQuery, query)
+
+	return c.ExecuteQuery(explainQuery)
 }

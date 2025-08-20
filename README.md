@@ -42,7 +42,7 @@ graph TB
         HTTP[HTTP Transport<br/>/mcp endpoint]
         STDIO[STDIO Transport]
         AUTH[OAuth Middleware]
-        TOOLS[MCP Tools<br/>• execute_query<br/>• list_catalogs<br/>• list_schemas<br/>• list_tables<br/>• get_table_schema]
+        TOOLS[MCP Tools<br/>• execute_query<br/>• list_catalogs<br/>• list_schemas<br/>• list_tables<br/>• get_table_schema<br/>• explain_query]
     end
     
     subgraph "Data Layer"
@@ -578,6 +578,46 @@ Get the schema of a table, understanding the structure of your data for better q
       "name": "comment",
       "type": "varchar",
       "nullable": false
+    }
+  ]
+}
+```
+
+### explain_query
+
+Analyze Trino query execution plans without running expensive queries, showing distributed execution stages and resource estimates.
+
+**Sample Prompt:**
+> "Can you explain how this query will be executed? I want to understand the performance characteristics before running it on production data."
+
+**Example:**
+```json
+{
+  "query": "SELECT region, COUNT(*) as customer_count FROM tpch.tiny.customer GROUP BY region ORDER BY customer_count DESC",
+  "format": "LOGICAL"
+}
+```
+
+**Response:**
+```json
+{
+  "execution_plan": [
+    {
+      "stage": "Fragment 0 [SINGLE]",
+      "operations": [
+        "Output[region, customer_count]",
+        "Sort[customer_count DESC NULLS LAST]",
+        "RemoteSource[sourceFragmentIds=[1]]"
+      ]
+    },
+    {
+      "stage": "Fragment 1 [HASH]",
+      "operations": [
+        "Aggregate[region, COUNT(*)]",
+        "TableScan[tpch:customer]"
+      ],
+      "estimated_rows": 25,
+      "estimated_cost": "cpu: 0.25, memory: 0.00, network: 0.05"
     }
   ]
 }
