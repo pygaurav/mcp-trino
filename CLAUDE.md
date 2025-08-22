@@ -39,7 +39,7 @@ make pack-dxt           # Package DXT extension
 # Testing individual components
 go test ./internal/config    # Test configuration package
 go test ./internal/trino     # Test Trino client package
-go test ./internal/handlers  # Test MCP handlers package
+go test ./internal/mcp       # Test MCP handlers package
 ```
 
 ## Architecture
@@ -65,11 +65,12 @@ go test ./internal/handlers  # Test MCP handlers package
    - Context-based timeout handling for queries
    - Query result processing and formatting
 
-4. **Handler Layer** (`internal/handlers/trino_handlers.go`): 
+4. **Handler Layer** (`internal/mcp/handlers.go`): 
    - MCP tool implementations with JSON response formatting
    - Parameter validation and error handling
    - Consistent logging for debugging
    - Tool result standardization
+   - OAuth middleware support for authenticated tools
 
 ### Transport Support
 
@@ -92,6 +93,7 @@ All tools return JSON-formatted responses and handle parameter validation:
 - `list_schemas`: List schemas within catalogs (optional catalog param)
 - `list_tables`: List tables within schemas (optional catalog/schema params)
 - `get_table_schema`: Retrieve table structure (required table param)
+- `explain_query`: Analyze query execution plans with optional format parameter
 
 ## Configuration
 
