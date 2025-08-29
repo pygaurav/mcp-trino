@@ -2,9 +2,11 @@ package trino
 
 import (
 	"context"
+	"crypto/tls"
 	"database/sql"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -22,7 +24,24 @@ type Client struct {
 
 // NewClient creates a new Trino client
 func NewClient(cfg *config.TrinoConfig) (*Client, error) {
-	dsn := fmt.Sprintf("%s://%s:%s@%s:%d?catalog=%s&schema=%s&SSL=%t&SSLInsecure=%t",
+	// Register custom client for SSL verification modes
+	var clientName string
+	if cfg.SSLVerification == "NONE" {
+		clientName = "no-ssl-verify"
+		// Create custom HTTP client with TLS verification disabled
+		customClient := &http.Client{
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{
+					InsecureSkipVerify: true,
+				},
+			},
+		}
+		// Register the custom client (ignore error if already registered)
+		trino.RegisterCustomClient(clientName, customClient)
+	}
+
+	// Build DSN
+	dsn := fmt.Sprintf("%s://%s:%s@%s:%d?catalog=%s&schema=%s&SSL=%t&SSLInsecure=%t&extra_credentials=%s",
 		cfg.Scheme,
 		url.QueryEscape(cfg.User),
 		url.QueryEscape(cfg.Password),
@@ -31,7 +50,13 @@ func NewClient(cfg *config.TrinoConfig) (*Client, error) {
 		url.QueryEscape(cfg.Catalog),
 		url.QueryEscape(cfg.Schema),
 		cfg.SSL,
-		cfg.SSLInsecure)
+		cfg.SSLInsecure,
+		url.QueryEscape(cfg.ExtraCredentials))
+	
+	// Add custom client to DSN if needed
+	if clientName != "" {
+		dsn += "&custom_client=" + clientName
+	}
 
 	// The Trino driver registers itself with database/sql on import
 	// We can just use sql.Open directly with the trino driver
