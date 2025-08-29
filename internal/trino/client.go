@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/trinodb/trino-go-client/trino"
+	"github.com/trinodb/trino-go-client/trino"
 	"github.com/tuannvm/mcp-trino/internal/config"
 )
 
