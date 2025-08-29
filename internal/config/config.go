@@ -21,6 +21,8 @@ type TrinoConfig struct {
 	Scheme            string
 	SSL               bool
 	SSLInsecure       bool
+	SSLVerification   string        // SSL verification mode: "NONE", "CA", "FULL"
+	ExtraCredentials  string        // Extra credentials for authentication
 	AllowWriteQueries bool          // Controls whether non-read-only SQL queries are allowed
 	QueryTimeout      time.Duration // Query execution timeout
 	
@@ -42,6 +44,8 @@ func NewTrinoConfig() (*TrinoConfig, error) {
 	port, _ := strconv.Atoi(getEnv("TRINO_PORT", "8080"))
 	ssl, _ := strconv.ParseBool(getEnv("TRINO_SSL", "true"))
 	sslInsecure, _ := strconv.ParseBool(getEnv("TRINO_SSL_INSECURE", "true"))
+	sslVerification := strings.ToUpper(getEnv("TRINO_SSL_VERIFICATION", "NONE"))
+	extraCredentials := getEnv("TRINO_EXTRA_CREDENTIALS", "")
 	scheme := getEnv("TRINO_SCHEME", "https")
 	allowWriteQueries, _ := strconv.ParseBool(getEnv("TRINO_ALLOW_WRITE_QUERIES", "false"))
 	oauthEnabled, _ := strconv.ParseBool(getEnv("TRINO_OAUTH_ENABLED", "false"))
@@ -75,6 +79,13 @@ func NewTrinoConfig() (*TrinoConfig, error) {
 	// If using HTTPS, force SSL to true
 	if strings.EqualFold(scheme, "https") {
 		ssl = true
+	}
+
+	// Validate SSL verification mode
+	validSSLVerificationModes := map[string]bool{"NONE": true, "CA": true, "FULL": true}
+	if !validSSLVerificationModes[sslVerification] {
+		log.Printf("WARNING: Invalid TRINO_SSL_VERIFICATION '%s'. Valid values: NONE, CA, FULL. Using default 'NONE'", sslVerification)
+		sslVerification = "NONE"
 	}
 
 	// Log a warning if write queries are allowed
@@ -112,6 +123,8 @@ func NewTrinoConfig() (*TrinoConfig, error) {
 		Scheme:            scheme,
 		SSL:               ssl,
 		SSLInsecure:       sslInsecure,
+		SSLVerification:   sslVerification,
+		ExtraCredentials:  extraCredentials,
 		AllowWriteQueries: allowWriteQueries,
 		QueryTimeout:      queryTimeout,
 		OAuthEnabled:      oauthEnabled,
